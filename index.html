@@ -5,29 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>川電テクノ スケジュールボード</title>
   
-  <!-- デザインを整えるためのTailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- Reactを動かすためのシステム -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   
-  <!-- ブラウザ上でプログラムを翻訳するBabel -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body class="bg-gray-100">
   <div id="root"></div>
 
   <script type="text/babel" data-type="module">
-    // --- Reactの機能を使えるようにする ---
     const { useState, useEffect } = React;
 
-    // --- Firebaseの機能を読み込む (CDN版) ---
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js';
     import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js';
     import { getFirestore, doc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js';
 
-    // --- ユーザーから提供された「鍵（Firebaseの設定）」 ---
     const firebaseConfig = {
       apiKey: "AIzaSyAO6OY-QQ52dByAeOwa2q14TkzGADYCsnA",
       authDomain: "kawaden-schedule.firebaseapp.com",
@@ -37,7 +31,6 @@
       appId: "1:893090658248:web:624450db548af18ba3f2fd"
     };
 
-    // --- 初期データ ---
     const INITIAL_PEOPLE = [
       '川口雄吉', '川口雄志', '石橋広行', '門田友彰', '小中原満',
       '池田元樹', '浜谷電気', '森拓也', '松本ダイスケ', '安井',
@@ -59,15 +52,9 @@
     ];
 
     const ROW_BGS = {
-      'bg-white': 'bg-white',
-      'bg-blue-100': 'bg-blue-100',
-      'bg-green-100': 'bg-green-100',
-      'bg-yellow-100': 'bg-yellow-100',
-      'bg-orange-100': 'bg-orange-100',
-      'bg-purple-100': 'bg-purple-100',
-      'bg-teal-100': 'bg-teal-100',
-      'bg-pink-100': 'bg-pink-100',
-      'bg-red-100': 'bg-red-100',
+      'bg-white': 'bg-white', 'bg-blue-100': 'bg-blue-100', 'bg-green-100': 'bg-green-100',
+      'bg-yellow-100': 'bg-yellow-100', 'bg-orange-100': 'bg-orange-100', 'bg-purple-100': 'bg-purple-100',
+      'bg-teal-100': 'bg-teal-100', 'bg-pink-100': 'bg-pink-100', 'bg-red-100': 'bg-red-100',
       'bg-gray-200': 'bg-gray-200',
     };
 
@@ -82,7 +69,6 @@
       { id: 8, type: 'status', name: '私用休', colorClass: 'bg-rose-100 text-rose-800 border-rose-200' },
     ];
 
-    // アプリ本体の機能
     function App() {
       const [currentUser, setCurrentUser] = useState(null);
       const [db, setDb] = useState(null);
@@ -103,12 +89,12 @@
       const [siteTaskInput, setSiteTaskInput] = useState('');
       
       const [newPersonName, setNewPersonName] = useState('');
-      
       const [editingPersonIndex, setEditingPersonIndex] = useState(null);
       const [editingPersonName, setEditingPersonName] = useState('');
 
-      // エラーメッセージを表示するためのStateを追加
-      const [dbError, setDbError] = useState(null);
+      const [authReady, setAuthReady] = useState(false);
+      const [syncStatus, setSyncStatus] = useState('connecting');
+      const [syncErrorMsg, setSyncErrorMsg] = useState('');
 
       useEffect(() => {
         const app = initializeApp(firebaseConfig);
@@ -121,12 +107,16 @@
             await signInAnonymously(auth);
           } catch (err) {
             console.error("Auth Error:", err);
+            setSyncStatus('error');
+            setSyncErrorMsg('匿名認証が有効になっていません。');
+            setAuthReady(true);
           }
         };
         initAuth();
 
         const unsubscribe = onAuthStateChanged(auth, (user) => {
           setCurrentUser(user);
+          setAuthReady(true);
         });
         return () => unsubscribe();
       }, []);
@@ -136,7 +126,7 @@
 
         const docRef = doc(db, 'scheduleBoard', 'main');
         const unsubscribe = onSnapshot(docRef, (docSnap) => {
-          setDbError(null); // 成功したらエラーを消す
+          setSyncStatus('synced');
           if (docSnap.exists()) {
             const data = docSnap.data();
             if (data.peopleList) setPeopleList(data.peopleList);
@@ -147,42 +137,29 @@
             if (data.globalMemo !== undefined) setGlobalMemo(data.globalMemo);
           } else {
             setDoc(docRef, {
-              peopleList: INITIAL_PEOPLE,
-              stamps: INITIAL_STAMPS,
-              schedule: {},
-              siteSchedule: {},
-              personColors: {},
-              globalMemo: ''
-            }).catch(err => {
-               console.error("Initial Save Error:", err);
-               handleFirestoreError(err);
-            });
+              peopleList: INITIAL_PEOPLE, stamps: INITIAL_STAMPS,
+              schedule: {}, siteSchedule: {}, personColors: {}, globalMemo: ''
+            }).catch(console.error);
           }
         }, (err) => {
           console.error("Firestore Listen Error:", err);
-          handleFirestoreError(err);
+          setSyncStatus('error');
+          if (err.code === 'permission-denied') {
+            setSyncErrorMsg('Firestoreのルール設定が完了していません。「テストモード」になっているか確認してください。');
+          } else {
+            setSyncErrorMsg(err.message);
+          }
         });
         return () => unsubscribe();
       }, [currentUser, db]);
 
-      // Firebaseのエラーを判定して分かりやすいメッセージにする処理
-      const handleFirestoreError = (err) => {
-        if (err.message && (err.message.includes("permission-denied") || err.message.includes("has not been used"))) {
-          setDbError("Firebaseコンソールで「Firestore Database」が作成されていません。");
-        } else {
-          setDbError("データベースに接続できません: " + err.message);
-        }
-      };
-
       const updateCloud = async (newData) => {
-        if (!currentUser || !db) return;
-        const docRef = doc(db, 'scheduleBoard', 'main');
+        if (!currentUser || !db || syncStatus === 'error' || syncStatus === 'offline') return;
         try {
+          const docRef = doc(db, 'scheduleBoard', 'main');
           await setDoc(docRef, newData, { merge: true });
-          setDbError(null); // 成功したらエラーを消す
         } catch (err) {
-          console.error("Save Error:", err);
-          handleFirestoreError(err);
+          console.error("Update Cloud Error:", err);
         }
       };
 
@@ -235,11 +212,7 @@
         if (!editingPersonName.trim()) return;
         const oldName = peopleList[index];
         const newName = editingPersonName.trim();
-        
-        if (oldName === newName) {
-          setEditingPersonIndex(null);
-          return;
-        }
+        if (oldName === newName) { setEditingPersonIndex(null); return; }
 
         const newPeopleList = [...peopleList];
         newPeopleList[index] = newName;
@@ -259,16 +232,8 @@
           }
         });
 
-        setPeopleList(newPeopleList);
-        setPersonColors(newPersonColors);
-        setSchedule(newSchedule);
-
-        updateCloud({
-          peopleList: newPeopleList,
-          personColors: newPersonColors,
-          schedule: newSchedule
-        });
-
+        setPeopleList(newPeopleList); setPersonColors(newPersonColors); setSchedule(newSchedule);
+        updateCloud({ peopleList: newPeopleList, personColors: newPersonColors, schedule: newSchedule });
         setEditingPersonIndex(null);
       };
 
@@ -290,15 +255,42 @@
 
       const handlePersonCellClick = (person, date) => {
         if (viewMode === 'preview') return;
-        setMemoInput(schedule[`${person}-${date}`]?.memo || '');
+        
+        // 既存のメモがあれば表示用にまとめる
+        const cellData = schedule[`${person}-${date}`];
+        let memoStr = '';
+        if (cellData) {
+          const arr = Array.isArray(cellData) ? cellData : [cellData];
+          memoStr = arr.map(a => a.memo).filter(Boolean).join(' / ');
+        }
+        
+        setMemoInput(memoStr);
         setSelectedPersonCell({ person, date });
       };
 
+      // 【修正】複数スタンプを押せるようにロジックを変更
       const handleStampClick = (stampName) => {
         const key = `${selectedPersonCell.person}-${selectedPersonCell.date}`;
         const newSchedule = { ...schedule };
-        if (stampName === '空欄にする') delete newSchedule[key];
-        else newSchedule[key] = { siteName: stampName, memo: memoInput.trim() };
+        
+        if (stampName === '空欄にする') {
+          // 空欄にする場合はその日の予定をすべて削除
+          delete newSchedule[key];
+        } else {
+          // 追加する新しいスタンプ
+          const newItem = { siteName: stampName, memo: memoInput.trim() };
+          
+          // 既に予定がある場合は配列として追加する
+          const existing = newSchedule[key];
+          if (existing) {
+            const arr = Array.isArray(existing) ? existing : [existing];
+            newSchedule[key] = [...arr, newItem];
+          } else {
+            // 初めて追加する場合
+            newSchedule[key] = [newItem];
+          }
+        }
+        
         setSchedule(newSchedule);
         updateCloud({ schedule: newSchedule });
         setSelectedPersonCell(null);
@@ -336,29 +328,28 @@
 
       const getStampColor = (name) => stamps.find(s => s.name === name)?.colorClass || 'bg-gray-50';
 
-      if (!currentUser) {
+      if (!authReady && syncStatus !== 'error') {
         return (
           <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white p-6 text-center">
-            <div>
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-              <p className="font-bold">サーバーに接続中...</p>
-            </div>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+            <p className="font-bold">サーバーに接続中...</p>
           </div>
         );
       }
 
       return (
-        <div className="min-h-screen bg-gray-100 font-sans text-sm md:text-base pb-24 relative">
+        <div className="min-h-screen bg-gray-100 font-sans text-sm md:text-base pb-24">
           
-          {/* 追加: データベース未作成時の警告表示 */}
-          {dbError && (
-            <div className="bg-red-600 text-white p-4 text-center shadow-lg relative z-50">
-              <p className="font-bold text-lg mb-1">⚠️ {dbError}</p>
-              <p className="text-sm">
-                Firebaseコンソール (console.firebase.google.com) を開き、<br/>
-                「kawaden-schedule」プロジェクト ＞ 「構築」 ＞ 「Firestore Database」から<br/>
-                <span className="font-bold underline">「データベースの作成 (テストモード)」</span>を行ってください。
-              </p>
+          {syncStatus === 'error' && (
+            <div className="bg-red-600 text-white p-3 md:p-4 text-xs md:text-sm shadow-md z-50">
+              <div className="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                <div>
+                  <p className="font-bold">⚠️ データベース接続エラー</p>
+                  <p className="mt-1">{syncErrorMsg}</p>
+                  <p className="mt-1 text-[11px] md:text-xs opacity-90 font-bold bg-red-800 inline-block px-2 py-1 rounded">※現在お試しモードです</p>
+                </div>
+                <button onClick={() => setSyncStatus('offline')} className="bg-red-800 hover:bg-red-900 px-4 py-2 rounded font-bold border border-red-500">閉じる</button>
+              </div>
             </div>
           )}
 
@@ -435,13 +426,14 @@
                       const cellData = schedule[`${person}-${d.date}`];
                       const isToday = d.date === todayStr;
                       return (
-                        <div key={dIndex} onClick={() => handlePersonCellClick(person, d.date)} className={`w-20 md:w-24 flex-shrink-0 p-1 flex items-stretch justify-center relative ${isToday ? 'border-r-2 border-red-500 bg-red-500/10 z-10' : 'border-r border-slate-300/40'} ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''}`} style={{ minHeight: '4rem' }}>
-                          {cellData && (
-                            <div className={`flex flex-col items-center justify-center w-full h-full p-1 rounded border shadow-sm ${getStampColor(cellData.siteName)}`}>
-                              <span className="text-[10px] md:text-[11px] font-bold leading-tight text-center">{cellData.siteName}</span>
-                              {cellData.memo && <span className="mt-1 pt-1 border-t border-black/10 w-full text-center text-[9px] leading-tight opacity-90 break-all">{cellData.memo}</span>}
+                        <div key={dIndex} onClick={() => handlePersonCellClick(person, d.date)} className={`w-20 md:w-24 flex-shrink-0 p-1 flex flex-col gap-1 items-stretch justify-start relative ${isToday ? 'border-r-2 border-red-500 bg-red-500/10 z-10' : 'border-r border-slate-300/40'} ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''}`} style={{ minHeight: '4rem' }}>
+                          {/* 【修正】配列化されたスタンプをすべて表示する */}
+                          {cellData && (Array.isArray(cellData) ? cellData : [cellData]).map((item, idx) => (
+                            <div key={idx} className={`flex flex-col items-center justify-center w-full p-1 rounded border shadow-sm ${getStampColor(item.siteName)}`}>
+                              <span className="text-[10px] md:text-[11px] font-bold leading-tight text-center">{item.siteName}</span>
+                              {item.memo && <span className="mt-0.5 pt-0.5 border-t border-black/10 w-full text-center text-[9px] leading-tight opacity-90 break-all">{item.memo}</span>}
                             </div>
-                          )}
+                          ))}
                         </div>
                       );
                     })}
@@ -462,7 +454,6 @@
             </div>
           </div>
 
-          {/* Popups */}
           {selectedPersonCell && (
             <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-50 backdrop-blur-sm p-4">
               <div className="bg-white w-full max-w-md rounded-2xl p-4 shadow-2xl animate-[slideUp_0.3s_ease-out]">
@@ -471,7 +462,7 @@
                 <input type="text" value={memoInput} onChange={(e) => setMemoInput(e.target.value)} className="w-full border-2 border-slate-200 rounded-lg p-3 text-sm focus:border-blue-500 outline-none" placeholder="作業内容など"/></div>
                 <div className="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto pb-4">
                   {stamps.map(s => <button key={s.id} onClick={() => handleStampClick(s.name)} className={`p-3 rounded-lg border-2 font-bold text-sm ${s.colorClass}`}>{s.name}</button>)}
-                  <button onClick={() => handleStampClick('空欄にする')} className="p-3 rounded-lg border-2 font-bold text-sm bg-slate-100 border-slate-200">クリア</button>
+                  <button onClick={() => handleStampClick('空欄にする')} className="p-3 rounded-lg border-2 font-bold text-sm bg-slate-100 border-slate-200">全クリア</button>
                 </div>
                 <button onClick={() => setSelectedPersonCell(null)} className="w-full mt-2 py-2 text-slate-400 text-xs font-bold font-sans">閉じる</button>
               </div>
@@ -557,7 +548,6 @@
       );
     }
 
-    // --- 画面にアプリを表示する ---
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
