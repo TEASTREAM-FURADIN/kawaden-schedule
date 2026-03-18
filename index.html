@@ -1,632 +1,429 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>川電テクノ スケジュールボード</title>
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
+
+// --- ユーザーから提供された「鍵（Firebaseの設定）」 ---
+const firebaseConfig = {
+  apiKey: "AIzaSyAO6OY-QQ52dByAeOwa2q14TkzGADYCsnA",
+  authDomain: "kawaden-schedule.firebaseapp.com",
+  projectId: "kawaden-schedule",
+  storageBucket: "kawaden-schedule.firebasestorage.app",
+  messagingSenderId: "893090658248",
+  appId: "1:893090658248:web:624450db548af18ba3f2fd"
+};
+
+// --- 初期データ ---
+const INITIAL_PEOPLE = [
+  '川口雄吉', '川口雄志', '石橋広行', '門田友彰', '小中原満',
+  '池田元樹', '浜谷電気', '森拓也', '松本ダイスケ', '安井',
+  '林涼介', 'おだ', '田子', 'まるは電気', '市原',
+  '野村', '柳井', '久保田浩行', '畠山電工', '加藤'
+];
+
+const COLOR_PRESETS = [
+  { id: 'white', class: 'bg-white text-slate-800 border-slate-300' },
+  { id: 'blue', class: 'bg-blue-100 text-blue-800 border-blue-200' },
+  { id: 'green', class: 'bg-green-100 text-green-800 border-green-200' },
+  { id: 'yellow', class: 'bg-yellow-100 text-yellow-800 border-yellow-200' },
+  { id: 'orange', class: 'bg-orange-100 text-orange-800 border-orange-200' },
+  { id: 'purple', class: 'bg-purple-100 text-purple-800 border-purple-200' },
+  { id: 'teal', class: 'bg-teal-100 text-teal-800 border-teal-200' },
+  { id: 'pink', class: 'bg-pink-100 text-pink-800 border-pink-200' },
+  { id: 'red', class: 'bg-red-100 text-red-800 font-bold border-red-200' },
+  { id: 'gray', class: 'bg-gray-200 text-gray-800 border-gray-300' },
+];
+
+const ROW_BGS = {
+  'bg-white': 'bg-white',
+  'bg-blue-100': 'bg-blue-100',
+  'bg-green-100': 'bg-green-100',
+  'bg-yellow-100': 'bg-yellow-100',
+  'bg-orange-100': 'bg-orange-100',
+  'bg-purple-100': 'bg-purple-100',
+  'bg-teal-100': 'bg-teal-100',
+  'bg-pink-100': 'bg-pink-100',
+  'bg-red-100': 'bg-red-100',
+  'bg-gray-200': 'bg-gray-200',
+};
+
+const INITIAL_STAMPS = [
+  { id: 1, type: 'site', name: '九条ビル', colorClass: 'bg-blue-100 text-blue-800 border-blue-200' },
+  { id: 2, type: 'site', name: 'キンチョー他', colorClass: 'bg-green-100 text-green-800 border-green-200' },
+  { id: 3, type: 'site', name: 'MUFG守口', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200' },
+  { id: 4, type: 'site', name: 'MUFG新大阪', colorClass: 'bg-orange-100 text-orange-800 border-orange-200' },
+  { id: 5, type: 'site', name: 'サンユー', colorClass: 'bg-purple-100 text-purple-800 border-purple-200' },
+  { id: 6, type: 'status', name: '休', colorClass: 'bg-red-100 text-red-800 font-bold border-red-200' },
+  { id: 7, type: 'status', name: '休仮', colorClass: 'bg-pink-100 text-pink-800 border-pink-200' },
+  { id: 8, type: 'status', name: '私用休', colorClass: 'bg-rose-100 text-rose-800 border-rose-200' },
+];
+
+export default function App() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [db, setDb] = useState(null);
+  const [startDate, setStartDate] = useState(new Date(2026, 2, 16)); 
+  const [peopleList, setPeopleList] = useState(INITIAL_PEOPLE);
+  const [stamps, setStamps] = useState(INITIAL_STAMPS); 
+  const [schedule, setSchedule] = useState({}); 
+  const [siteSchedule, setSiteSchedule] = useState({}); 
+  const [personColors, setPersonColors] = useState({}); 
+  const [globalMemo, setGlobalMemo] = useState(''); 
+  const [viewMode, setViewMode] = useState('edit'); 
+  const [isStampSettingOpen, setIsStampSettingOpen] = useState(false);
+  const [isPersonSettingOpen, setIsPersonSettingOpen] = useState(false);
+  const [selectedPersonCell, setSelectedPersonCell] = useState(null); 
+  const [selectedSiteCell, setSelectedSiteCell] = useState(null); 
+  const [selectedPersonForColor, setSelectedPersonForColor] = useState(null); 
+  const [memoInput, setMemoInput] = useState(''); 
+  const [siteTaskInput, setSiteTaskInput] = useState('');
   
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  
-  <script type="importmap">
-    {
-      "imports": {
-        "react": "https://esm.sh/react@18.2.0",
-        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-        "firebase/app": "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js",
-        "firebase/auth": "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js",
-        "firebase/firestore": "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js"
+  // 【修正箇所】ここで newPersonName を正しく定義しました
+  const [newPersonName, setNewPersonName] = useState('');
+
+  // 1. Firebase初期化と認証
+  useEffect(() => {
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const firestore = getFirestore(app);
+    setDb(firestore);
+
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (err) {
+        console.error("Auth Error:", err);
       }
-    }
-  </script>
-  
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <style>
-    @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-    @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-    * { -webkit-tap-highlight-color: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-    .no-scrollbar::-webkit-scrollbar { display: none; }
-    
-    /* 📸 画像化の瞬間だけ発動する特殊な魔法のスタイル（見切れ＆右端切れ防止） */
-    .capture-mode #table-wrapper { overflow: visible !important; }
-    .capture-mode #capture-area { width: max-content !important; min-width: 100% !important; padding-right: 40px !important; padding-bottom: 60px !important; }
-    .capture-mode .fix-clip { padding-bottom: 6px !important; overflow: visible !important; line-height: 1.4 !important; }
-    
-    /* プレビュー画面の背景 */
-    .img-preview-overlay { background: rgba(0,0,0,0.85); backdrop-filter: blur(5px); }
-  </style>
-</head>
-<body class="bg-gray-100">
-  <div id="root"></div>
-
-  <script type="text/babel" data-type="module">
-    import React, { useState, useEffect, useRef } from 'react';
-    import { createRoot } from 'react-dom/client';
-    import { initializeApp } from 'firebase/app';
-    import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-    import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
-
-    const firebaseConfig = {
-      apiKey: "AIzaSyAO6OY-QQ52dByAeOwa2q14TkzGADYCsnA",
-      authDomain: "kawaden-schedule.firebaseapp.com",
-      projectId: "kawaden-schedule",
-      storageBucket: "kawaden-schedule.firebasestorage.app",
-      messagingSenderId: "893090658248",
-      appId: "1:893090658248:web:624450db548af18ba3f2fd"
     };
+    initAuth();
 
-    const INITIAL_PEOPLE = ['川口雄吉', '川口雄志', '石橋広行', '門田友彰', '小中原満', '池田元樹', '浜谷電気', '森拓也', '松本ダイスケ', '安井', '林涼介', 'おだ', '田子', 'まるは電気', '市原', '野村', '柳井', '久保田浩行', '畠山電工', '加藤'];
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
 
-    const COLOR_PRESETS = [
-      { id: 'white', class: 'bg-white text-slate-800 border-slate-300' },
-      { id: 'blue', class: 'bg-blue-200 text-blue-950 border-blue-400' },
-      { id: 'green', class: 'bg-green-200 text-green-950 border-green-400' },
-      { id: 'yellow', class: 'bg-yellow-200 text-yellow-950 border-yellow-400' },
-      { id: 'orange', class: 'bg-orange-200 text-orange-950 border-orange-400' },
-      { id: 'purple', class: 'bg-purple-200 text-purple-950 border-purple-400' },
-      { id: 'teal', class: 'bg-teal-200 text-teal-950 border-teal-400' },
-      { id: 'rose', class: 'bg-rose-200 text-rose-950 border-rose-400' },
-      { id: 'red', class: 'bg-red-200 text-red-950 font-bold border-red-400' },
-      { id: 'gray', class: 'bg-slate-300 text-slate-950 border-slate-400' },
-    ];
+  // 2. クラウド同期の接続（認証成功後に実行）
+  useEffect(() => {
+    if (!currentUser || !db) return;
 
-    const ROW_BGS = {
-      'bg-white': 'bg-white', 'bg-blue-200': 'bg-blue-200', 'bg-green-200': 'bg-green-200', 'bg-yellow-200': 'bg-yellow-200', 'bg-orange-200': 'bg-orange-200', 'bg-purple-200': 'bg-purple-200', 'bg-teal-200': 'bg-teal-200', 'bg-rose-200': 'bg-rose-200', 'bg-red-200': 'bg-red-200', 'bg-slate-300': 'bg-slate-300'
-    };
-
-    const INITIAL_STAMPS = [
-      { id: 1, type: 'site', name: '九条ビル', colorClass: 'bg-blue-200 text-blue-950 border-blue-400' },
-      { id: 2, type: 'site', name: 'キンチョー他', colorClass: 'bg-green-200 text-green-950 border-green-400' },
-      { id: 3, type: 'site', name: 'MUFG守口', colorClass: 'bg-yellow-200 text-yellow-950 border-yellow-400' },
-      { id: 4, type: 'site', name: 'MUFG新大阪', colorClass: 'bg-orange-200 text-orange-950 border-orange-400' },
-      { id: 5, type: 'site', name: 'サンユー', colorClass: 'bg-purple-200 text-purple-950 border-purple-400' },
-      { id: 6, type: 'status', name: '休', colorClass: 'bg-red-200 text-red-950 font-bold border-red-400' },
-      { id: 7, type: 'status', name: '休仮', colorClass: 'bg-pink-100 text-pink-800 border-pink-200' },
-      { id: 8, type: 'status', name: '私用休', colorClass: 'bg-slate-300 text-slate-950 border-slate-400' },
-    ];
-
-    function App() {
-      const [currentUser, setCurrentUser] = useState(null);
-      const [db, setDb] = useState(null);
-      const [startDate, setStartDate] = useState(new Date(2026, 2, 16)); 
-      const [boardTitle, setBoardTitle] = useState('川電テクノ スケジュール案');
-      const [peopleList, setPeopleList] = useState(INITIAL_PEOPLE);
-      const [stamps, setStamps] = useState(INITIAL_STAMPS);
-      const [schedule, setSchedule] = useState({}); 
-      const [siteSchedule, setSiteSchedule] = useState({}); 
-      const [personColors, setPersonColors] = useState({}); 
-      const [globalMemo, setGlobalMemo] = useState(''); 
-      const [viewMode, setViewMode] = useState('edit'); 
-      const [isHelpOpen, setIsHelpOpen] = useState(false);
-      const [isStampSettingOpen, setIsStampSettingOpen] = useState(false);
-      const [isPersonSettingOpen, setIsPersonSettingOpen] = useState(false);
-      const [selectedSiteCell, setSelectedSiteCell] = useState(null); 
-      const [selectedPersonForColor, setSelectedPersonForColor] = useState(null); 
-      const [editingStamp, setEditingStamp] = useState(null); 
-      const [siteTaskInput, setSiteTaskInput] = useState('');
-      const [isSiteTaskRed, setIsSiteTaskRed] = useState(false);
-      const [selectedPersonCell, setSelectedPersonCell] = useState(null); 
-      const [tempTasks, setTempTasks] = useState([]);
-      const [activeTaskIndex, setActiveTaskIndex] = useState(0);
-      const [isMultiMode, setIsMultiMode] = useState(false);
-      
-      const [previewImage, setPreviewImage] = useState(null);
-      const [isGenerating, setIsGenerating] = useState(false);
-
-      useEffect(() => {
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const firestore = getFirestore(app);
-        setDb(firestore);
-        signInAnonymously(auth).catch(err => console.error("Auth Error:", err));
-        const unsubscribe = onAuthStateChanged(auth, setCurrentUser);
-        return () => unsubscribe();
-      }, []);
-
-      useEffect(() => {
-        if (!currentUser || !db) return;
-        const docRef = doc(db, 'scheduleBoard', 'main');
-        const unsubscribe = onSnapshot(docRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            let migratedSchedule = {};
-            if (data.schedule) {
-              for (let key in data.schedule) {
-                migratedSchedule[key] = Array.isArray(data.schedule[key]) ? data.schedule[key] : [{ ...data.schedule[key], time: '終日' }];
-              }
-            }
-            let migratedSiteSchedule = {};
-            if (data.siteSchedule) {
-              for (let key in data.siteSchedule) {
-                migratedSiteSchedule[key] = typeof data.siteSchedule[key] === 'string' ? { text: data.siteSchedule[key], isRed: false } : data.siteSchedule[key];
-              }
-            }
-            if (data.boardTitle) setBoardTitle(data.boardTitle);
-            if (data.peopleList) setPeopleList(data.peopleList);
-            if (data.stamps && data.stamps.length > 0) setStamps(data.stamps);
-            setSchedule(migratedSchedule);
-            setSiteSchedule(migratedSiteSchedule);
-            if (data.personColors) setPersonColors(data.personColors);
-            if (data.globalMemo !== undefined) setGlobalMemo(data.globalMemo);
-          } else {
-            setDoc(docRef, { boardTitle: '川電テクノ スケジュール案', peopleList: INITIAL_PEOPLE, stamps: INITIAL_STAMPS, schedule: {}, siteSchedule: {}, personColors: {}, globalMemo: '' });
-          }
+    const docRef = doc(db, 'scheduleBoard', 'main');
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.peopleList) setPeopleList(data.peopleList);
+        if (data.stamps) setStamps(data.stamps);
+        if (data.schedule) setSchedule(data.schedule);
+        if (data.siteSchedule) setSiteSchedule(data.siteSchedule);
+        if (data.personColors) setPersonColors(data.personColors);
+        if (data.globalMemo !== undefined) setGlobalMemo(data.globalMemo);
+      } else {
+        // データがない場合は初期化
+        setDoc(docRef, {
+          peopleList: INITIAL_PEOPLE,
+          stamps: INITIAL_STAMPS,
+          schedule: {},
+          siteSchedule: {},
+          personColors: {},
+          globalMemo: ''
         });
-        return () => unsubscribe();
-      }, [currentUser, db]);
-
-      const updateCloud = async (newData) => {
-        if (!currentUser || !db) return;
-        const docRef = doc(db, 'scheduleBoard', 'main');
-        await setDoc(docRef, newData, { merge: true });
-      };
-
-      const todayStr = `${new Date().getMonth() + 1}/${new Date().getDate()}`;
-      const currentDates = Array.from({ length: 14 }).map((_, i) => {
-        const d = new Date(startDate);
-        d.setDate(startDate.getDate() + i);
-        return { date: `${d.getMonth() + 1}/${d.getDate()}`, day: ['日','月','火','水','木','金','土'][d.getDay()] };
-      });
-
-      const shiftDate = (days) => setStartDate(prev => { const d = new Date(prev); d.setDate(d.getDate() + days); return d; });
-      const resetToToday = () => {
-        const today = new Date();
-        const diff = today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1);
-        setStartDate(new Date(today.setDate(diff)));
-      };
-
-      // 📸 パノラマ撮影モード（全幅展開・見切れ完全ガード版）
-      const exportAsImage = async () => {
-        const element = document.getElementById('capture-area');
-        const wrapper = document.getElementById('table-wrapper');
-        if (!element || !wrapper || isGenerating) return;
-        
-        setIsGenerating(true);
-        
-        // 魔法発動：スクロールを解除し、表を全幅に広げて「下切れ防止用」の余白を追加する
-        document.body.classList.add('capture-mode');
-        
-        try {
-          // 画面が広がりきるまで0.8秒待つ（これが右端切れを防ぐ一番の鍵です）
-          await new Promise(r => setTimeout(r, 800));
-          
-          const canvas = await window.html2canvas(element, { 
-            scale: 2, 
-            backgroundColor: '#f3f4f6',
-            logging: false,
-            useCORS: true,
-            windowWidth: element.scrollWidth + 50, // 見えない右側も認識させる
-          });
-          
-          const dataUrl = canvas.toDataURL('image/png');
-          setPreviewImage(dataUrl);
-        } catch (err) { 
-          alert("画像の作成に失敗しました。再読み込みして再度お試しください。"); 
-        } finally {
-          // 魔法解除：元の画面に戻す
-          document.body.classList.remove('capture-mode');
-          setIsGenerating(false);
-        }
-      };
-
-      const addPerson = () => { if (!newPersonName.trim()) return; const newList = [...peopleList, newPersonName.trim()]; setPeopleList(newList); updateCloud({ peopleList: newList }); setNewPersonName(''); };
-      const movePerson = (index, direction) => { const newList = [...peopleList]; const target = direction === 'up' ? index - 1 : index + 1; if (target >= 0 && target < newList.length) { [newList[index], newList[target]] = [newList[target], newList[index]]; setPeopleList(newList); updateCloud({ peopleList: newList }); } };
-      const deletePerson = (index) => { if(window.confirm('削除しますか？')) { const newList = peopleList.filter((_, i) => i !== index); setPeopleList(newList); updateCloud({ peopleList: newList }); } };
-      const handlePersonColorClick = (colorClass) => { const newColors = { ...personColors }; if (colorClass === 'bg-white text-slate-800') delete newColors[selectedPersonForColor]; else newColors[selectedPersonForColor] = colorClass; setPersonColors(newColors); updateCloud({ personColors: newColors }); setSelectedPersonForColor(null); };
-
-      const [newStampName, setNewStampName] = useState('');
-      const [newStampType, setNewStampType] = useState('site');
-      const [newStampColor, setNewStampColor] = useState(COLOR_PRESETS[1].class);
-      const addNewStamp = () => { if (!newStampName.trim()) return; const newStamps = [...stamps, { id: Date.now(), type: newStampType, name: newStampName.trim(), colorClass: newStampColor }]; setStamps(newStamps); updateCloud({ stamps: newStamps }); setNewStampName(''); };
-      const deleteStamp = (id) => { if(window.confirm('このスタンプを削除しますか？')) { const newStamps = stamps.filter(s => s.id !== id); setStamps(newStamps); updateCloud({ stamps: newStamps }); } };
-      const getStampColor = (name) => stamps.find(s => s.name === name)?.colorClass || 'bg-gray-100 text-slate-900 border-slate-300';
-
-      const handleSiteCellClick = (siteName, date) => {
-        if (viewMode === 'preview') return;
-        const existing = siteSchedule[`${siteName}-${date}`];
-        setSiteTaskInput(existing?.text || '');
-        setIsSiteTaskRed(existing?.isRed || false);
-        setSelectedSiteCell({ siteName, date });
-      };
-
-      const saveSiteTask = () => {
-        const key = `${selectedSiteCell.siteName}-${selectedSiteCell.date}`;
-        const newSiteSchedule = { ...siteSchedule };
-        if (!siteTaskInput.trim()) delete newSiteSchedule[key];
-        else newSiteSchedule[key] = { text: siteTaskInput.trim(), isRed: isSiteTaskRed };
-        setSiteSchedule(newSiteSchedule);
-        updateCloud({ siteSchedule: newSiteSchedule });
-        setSelectedSiteCell(null);
-      };
-
-      const handlePersonCellClick = (person, date) => {
-        if (viewMode === 'preview') return;
-        const existing = schedule[`${person}-${date}`] || [];
-        setTempTasks([
-          existing[0] || { siteName: '', memo: '', time: '終日' },
-          existing[1] || { siteName: '', memo: '', time: 'PM' },
-          existing[2] || { siteName: '', memo: '', time: '夜間' }
-        ]);
-        setActiveTaskIndex(0);
-        setIsMultiMode(existing.length > 1);
-        setSelectedPersonCell({ person, date });
-      };
-
-      const handleQuickSiteSelect = (siteName) => {
-        const key = `${selectedPersonCell.person}-${selectedPersonCell.date}`;
-        const newSchedule = { ...schedule };
-        if (!siteName) delete newSchedule[key];
-        else newSchedule[key] = [{ siteName, memo: '', time: '終日' }];
-        setSchedule(newSchedule);
-        updateCloud({ schedule: newSchedule });
-        setSelectedPersonCell(null);
-      };
-
-      const handleTempTaskChange = (field, value) => {
-        const newTasks = [...tempTasks];
-        newTasks[activeTaskIndex] = { ...newTasks[activeTaskIndex], [field]: value };
-        setTempTasks(newTasks);
-      };
-
-      const savePersonTasks = () => {
-        const key = `${selectedPersonCell.person}-${selectedPersonCell.date}`;
-        const validTasks = tempTasks.filter(t => t.siteName.trim() !== '');
-        const newSchedule = { ...schedule };
-        if (validTasks.length === 0) delete newSchedule[key];
-        else newSchedule[key] = validTasks;
-        setSchedule(newSchedule);
-        updateCloud({ schedule: newSchedule });
-        setSelectedPersonCell(null);
-      };
-
-      const saveEditedStampName = (id, newName) => {
-        if (!newName.trim()) return;
-        const newStamps = stamps.map(s => s.id === id ? { ...s, name: newName.trim() } : s);
-        setStamps(newStamps);
-        updateCloud({ stamps: newStamps });
-        setEditingStamp(null);
-      };
-
-      if (!currentUser) {
-        return (
-          <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white p-6 text-center">
-            <div><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div><p className="font-bold">サーバーに接続中...</p></div>
-          </div>
-        );
       }
+    }, (err) => {
+      console.error("Firestore Listen Error:", err);
+    });
+    return () => unsubscribe();
+  }, [currentUser, db]);
 
-      return (
-        <div className="min-h-screen bg-gray-100 font-sans text-sm md:text-base pb-24 select-none">
-          
-          <div className="bg-slate-800 text-white p-3 md:p-4 shadow-md sticky top-0 z-30 flex flex-col gap-3">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <h1 className="font-bold text-sm md:text-base opacity-95 tracking-tight">管理システム</h1>
-                <button onClick={() => setIsHelpOpen(true)} className="bg-slate-700 hover:bg-slate-600 text-white text-[10px] md:text-xs px-2 py-1 rounded-full border border-slate-500">❓ 使い方</button>
-              </div>
-              <div className="flex gap-2">
-                {viewMode === 'edit' && (
-                  <>
-                    <button onClick={() => setIsPersonSettingOpen(true)} className="bg-slate-600 hover:bg-slate-500 text-white px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm">👤 人員</button>
-                    <button onClick={() => setIsStampSettingOpen(true)} className="bg-slate-600 hover:bg-slate-500 text-white px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm">⚙️ 設定</button>
-                  </>
-                )}
-                <button onClick={() => setViewMode(viewMode === 'edit' ? 'preview' : 'edit')} className={`px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm transition-all ${viewMode === 'edit' ? 'bg-blue-500 hover:bg-blue-400 text-white' : 'bg-slate-600 hover:bg-slate-500 text-white'}`}>
-                  {viewMode === 'edit' ? '📸 LINE送信・保存' : '✏️ 編集に戻る'}
-                </button>
-              </div>
-            </div>
+  const updateCloud = async (newData) => {
+    if (!currentUser || !db) return;
+    const docRef = doc(db, 'scheduleBoard', 'main');
+    await setDoc(docRef, newData, { merge: true });
+  };
+
+  const todayStr = `${new Date().getMonth() + 1}/${new Date().getDate()}`;
+  const currentDates = Array.from({ length: 14 }).map((_, i) => {
+    const d = new Date(startDate);
+    d.setDate(startDate.getDate() + i);
+    return { date: `${d.getMonth() + 1}/${d.getDate()}`, day: ['日','月','火','水','木','金','土'][d.getDay()] };
+  });
+
+  const shiftDate = (days) => setStartDate(prev => { const d = new Date(prev); d.setDate(d.getDate() + days); return d; });
+  const resetToToday = () => {
+    const today = new Date();
+    const diff = today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1);
+    setStartDate(new Date(today.setDate(diff)));
+  };
+
+  const addPerson = () => {
+    if (!newPersonName.trim()) return;
+    const newList = [...peopleList, newPersonName.trim()];
+    setPeopleList(newList);
+    updateCloud({ peopleList: newList });
+    setNewPersonName('');
+  };
+
+  const movePerson = (index, direction) => {
+    const newList = [...peopleList];
+    const target = direction === 'up' ? index - 1 : index + 1;
+    if (target >= 0 && target < newList.length) {
+      [newList[index], newList[target]] = [newList[target], newList[index]];
+      setPeopleList(newList);
+      updateCloud({ peopleList: newList });
+    }
+  };
+
+  const deletePerson = (index) => {
+    if(window.confirm('削除しますか？')) {
+      const newList = peopleList.filter((_, i) => i !== index);
+      setPeopleList(newList);
+      updateCloud({ peopleList: newList });
+    }
+  };
+
+  const handleSiteCellClick = (siteName, date) => {
+    if (viewMode === 'preview') return;
+    setSiteTaskInput(siteSchedule[`${siteName}-${date}`] || '');
+    setSelectedSiteCell({ siteName, date });
+  };
+
+  const saveSiteTask = () => {
+    const key = `${selectedSiteCell.siteName}-${selectedSiteCell.date}`;
+    const newSiteSchedule = { ...siteSchedule };
+    if (!siteTaskInput.trim()) delete newSiteSchedule[key];
+    else newSiteSchedule[key] = siteTaskInput.trim();
+    setSiteSchedule(newSiteSchedule);
+    updateCloud({ siteSchedule: newSiteSchedule });
+    setSelectedSiteCell(null);
+  };
+
+  const handlePersonCellClick = (person, date) => {
+    if (viewMode === 'preview') return;
+    setMemoInput(schedule[`${person}-${date}`]?.memo || '');
+    setSelectedPersonCell({ person, date });
+  };
+
+  const handleStampClick = (stampName) => {
+    const key = `${selectedPersonCell.person}-${selectedPersonCell.date}`;
+    const newSchedule = { ...schedule };
+    if (stampName === '空欄にする') delete newSchedule[key];
+    else newSchedule[key] = { siteName: stampName, memo: memoInput.trim() };
+    setSchedule(newSchedule);
+    updateCloud({ schedule: newSchedule });
+    setSelectedPersonCell(null);
+    setMemoInput('');
+  };
+
+  const handlePersonColorClick = (colorClass) => {
+    const newColors = { ...personColors };
+    if (colorClass === 'bg-slate-200 text-slate-800') delete newColors[selectedPersonForColor];
+    else newColors[selectedPersonForColor] = colorClass;
+    setPersonColors(newColors);
+    updateCloud({ personColors: newColors });
+    setSelectedPersonForColor(null);
+  };
+
+  const [newStampName, setNewStampName] = useState('');
+  const [newStampType, setNewStampType] = useState('site');
+  const [newStampColor, setNewStampColor] = useState(COLOR_PRESETS[0].class);
+
+  const addNewStamp = () => {
+    if (!newStampName.trim()) return;
+    const newStamps = [...stamps, { id: Date.now(), type: newStampType, name: newStampName.trim(), colorClass: newStampColor }];
+    setStamps(newStamps);
+    updateCloud({ stamps: newStamps });
+    setNewStampName('');
+  };
+
+  const deleteStamp = (id) => {
+    if(window.confirm('削除しますか？')) {
+      const newStamps = stamps.filter(s => s.id !== id);
+      setStamps(newStamps);
+      updateCloud({ stamps: newStamps });
+    }
+  };
+
+  const getStampColor = (name) => stamps.find(s => s.name === name)?.colorClass || 'bg-gray-50';
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white p-6 text-center">
+        <div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+          <p className="font-bold">サーバーに接続中...</p>
+          <p className="text-xs opacity-60 mt-2">※数秒経ってもこの画面のままの場合、Firebaseコンソールで<br/>「Authentication &gt; 匿名ログイン」が有効になっているか確認してください。</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-100 font-sans text-sm md:text-base pb-24">
+      <div className="bg-slate-800 text-white p-3 md:p-4 shadow-md sticky top-0 z-30 flex flex-col gap-3">
+        <div className="flex justify-between items-center">
+          <h1 className="font-bold text-base md:text-lg">川電テクノ スケジュールボード</h1>
+          <div className="flex gap-2">
             {viewMode === 'edit' && (
-              <div className="flex items-center justify-between bg-slate-700 rounded-lg p-1 border border-slate-600 relative pb-4 md:pb-1">
-                <button onClick={() => shiftDate(-7)} className="px-4 py-1 text-xs md:text-sm text-white hover:bg-slate-600 rounded">◀ 前の週</button>
-                <div className="text-xs md:text-sm font-bold tracking-wider">{currentDates[0].date} 〜 {currentDates[13].date}</div>
-                <button onClick={() => shiftDate(7)} className="px-4 py-1 text-xs md:text-sm text-white hover:bg-slate-600 rounded">次の週 ▶</button>
-                <button onClick={resetToToday} className="absolute left-1/2 -bottom-3 -translate-x-1/2 bg-blue-500 text-white text-[10px] px-3 py-1 rounded-full shadow-lg border border-blue-400">今日に戻る</button>
-              </div>
+              <>
+                <button onClick={() => setIsPersonSettingOpen(true)} className="bg-slate-600 text-white px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm active:scale-95 transition-transform">👤 人員管理</button>
+                <button onClick={() => setIsStampSettingOpen(true)} className="bg-slate-600 text-white px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm active:scale-95 transition-transform">⚙️ スタンプ</button>
+              </>
             )}
+            <button onClick={() => setViewMode(viewMode === 'edit' ? 'preview' : 'edit')} className={`px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm active:scale-95 transition-transform whitespace-nowrap ${viewMode === 'edit' ? 'bg-blue-500 text-white' : 'bg-white text-slate-800'}`}>{viewMode === 'edit' ? '📸 LINE用に切替' : '✏️ 編集に戻る'}</button>
+          </div>
+        </div>
+        {viewMode === 'edit' && (
+          <div className="flex items-center justify-between bg-slate-700 rounded-lg p-1 border border-slate-600 relative pb-4 md:pb-1">
+            <button onClick={() => shiftDate(-7)} className="px-3 py-1 text-xs md:text-sm text-white hover:bg-slate-600 rounded">◀ 前の週</button>
+            <div className="text-xs md:text-sm font-bold tracking-wider">{currentDates[0].date} 〜 {currentDates[13].date}</div>
+            <button onClick={() => shiftDate(7)} className="px-3 py-1 text-xs md:text-sm text-white hover:bg-slate-600 rounded">次の週 ▶</button>
+            <button onClick={resetToToday} className="absolute left-1/2 -bottom-3 -translate-x-1/2 bg-blue-500 text-white text-[10px] px-3 py-1 rounded-full shadow-lg border border-blue-400">今日に戻る</button>
+          </div>
+        )}
+      </div>
+
+      <div className="p-2 md:p-4 overflow-x-auto pt-4 md:pt-6">
+        <div className="min-w-max bg-white rounded-lg shadow-lg border-2 border-slate-300 overflow-hidden">
+          <div className="flex border-b-2 border-slate-400 bg-slate-100 sticky top-0 z-20">
+            <div className="w-32 md:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center justify-center sticky left-0 bg-slate-200 z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">現場 / 氏名</div>
+            {currentDates.map((d, i) => {
+              const isToday = d.date === todayStr;
+              return (
+                <div key={i} className={`w-20 md:w-24 flex-shrink-0 p-2 text-center relative ${isToday ? 'border-r-2 border-red-500 bg-red-100 z-10 shadow-sm' : 'border-r border-slate-300 bg-slate-50'}`}>
+                  <div className={`font-bold ${isToday ? 'text-red-700' : 'text-slate-800'}`}>{d.date}</div>
+                  <div className={`text-xs font-bold ${isToday ? 'text-red-600' : d.day === '日' ? 'text-red-500' : d.day === '土' ? 'text-blue-500' : 'text-slate-500'}`}>({d.day}){isToday && <span className="ml-1 text-[10px] bg-red-500 text-white px-1 py-0.5 rounded-sm">今日</span>}</div>
+                </div>
+              );
+            })}
           </div>
 
-          {viewMode === 'preview' && (
-            <div className="bg-blue-50 border-b border-blue-200 p-3 flex flex-col items-center gap-3 shadow-inner sticky top-14 z-20 animate-[fadeIn_0.3s_ease]">
-              <button 
-                onClick={exportAsImage} 
-                disabled={isGenerating}
-                className={`${isGenerating ? 'bg-gray-400' : 'bg-green-500 hover:bg-green-600'} text-white font-black py-4 px-8 rounded-full shadow-xl flex items-center gap-2 active:scale-95 transition-all`}
-              >
-                {isGenerating ? (
-                  <>⚙️ 画像を作成中... (少々お待ちください)</>
-                ) : (
-                  <><span className="text-lg font-bold">📸</span> LINE送信用の画像を作る</>
-                )}
-              </button>
-              <p className="text-[10px] md:text-xs text-blue-700 font-black tracking-tight">※作成後に表示される画像を【長押し】して保存してください</p>
-            </div>
-          )}
-
-          {/* 🌟 スマホで横スクロールさせるためのラッパー（IDを追加） */}
-          <div id="table-wrapper" className="p-2 md:p-4 overflow-x-auto pt-4 md:pt-6">
-            {/* 🌟 撮影範囲となるエリア（全幅展開するための w-max を追加） */}
-            <div id="capture-area" className="w-max min-w-full bg-gray-100 p-2 md:p-4 rounded-xl pb-12">
-              
-              <div className="flex justify-between items-end mb-4 px-2 border-b-2 border-slate-400 pb-2">
-                {viewMode === 'edit' ? (
-                  <input type="text" value={boardTitle} onChange={(e) => setBoardTitle(e.target.value)} onBlur={() => updateCloud({ boardTitle })} placeholder="タイトルを入力..." className="font-bold text-xl md:text-2xl text-slate-800 bg-white border-2 border-blue-200 rounded p-1 focus:border-blue-500 outline-none w-2/3 md:w-1/2 shadow-sm"/>
-                ) : (
-                  <h2 className="font-bold text-xl md:text-2xl text-slate-800 tracking-wide fix-clip">{boardTitle}</h2>
-                )}
-                <div className="text-sm md:text-base font-bold text-slate-600 bg-white px-3 py-1 rounded-full shadow-sm border border-slate-300 whitespace-nowrap ml-4">{currentDates[0].date} 〜 {currentDates[13].date}</div>
-              </div>
-
-              <div className="bg-white rounded-lg shadow-lg border-2 border-slate-300 overflow-hidden">
-                <div className="flex border-b-2 border-slate-400 bg-slate-100">
-                  <div className="w-32 md:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center justify-center bg-slate-200">現場 / 氏名</div>
-                  {currentDates.map((d, i) => {
-                    const isToday = d.date === todayStr;
-                    return (
-                      <div key={i} className={`w-20 md:w-24 flex-shrink-0 p-2 text-center relative ${isToday ? 'border-r-2 border-red-500 bg-red-100 z-10 shadow-sm' : 'border-r border-slate-300 bg-slate-50'}`}>
-                        <div className={`font-bold ${isToday ? 'text-red-700' : 'text-slate-800'}`}>{d.date}</div>
-                        <div className={`text-xs font-bold ${isToday ? 'text-red-600' : d.day === '日' ? 'text-red-500' : d.day === '土' ? 'text-blue-500' : 'text-slate-500'}`}>({d.day}){isToday && <span className="ml-1 text-[10px] bg-red-500 text-white px-1 py-0.5 rounded-sm shadow-sm">今日</span>}</div>
-                      </div>
-                    );
-                  })}
+          <div className="border-b-4 border-slate-500">
+            {stamps.filter(s => s.type === 'site').map((site, sIndex) => {
+              const bgClass = site.colorClass.split(' ').find(c => c.startsWith('bg-'));
+              const rowBgClass = ROW_BGS[bgClass] || 'bg-white';
+              const textClass = site.colorClass.split(' ').find(c => c.startsWith('text-'));
+              return (
+                <div key={`site-${sIndex}`} className={`flex border-b border-slate-300 ${rowBgClass}`}>
+                  <div className={`w-32 md:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex flex-col justify-center items-center sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] bg-slate-200`}>
+                    <div className={`text-[11px] md:text-xs p-1 rounded w-full text-center border bg-white/90 ${textClass}`}>{site.name}</div>
+                  </div>
+                  {currentDates.map((d, dIndex) => (
+                    <div key={dIndex} onClick={() => handleSiteCellClick(site.name, d.date)} className={`w-20 md:w-24 flex-shrink-0 p-1 flex items-center justify-center relative ${d.date === todayStr ? 'border-r-2 border-red-500 bg-red-500/10 z-10' : 'border-r border-slate-300/40'} ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''}`} style={{ minHeight: '3.5rem' }}>
+                      <div className="text-[10px] md:text-xs font-bold text-slate-800 text-center break-all whitespace-pre-wrap leading-tight drop-shadow-sm">{siteSchedule[`${site.name}-${d.date}`]}</div>
+                    </div>
+                  ))}
                 </div>
+              );
+            })}
+            <div className="bg-slate-700 text-white text-[10px] font-bold py-1 px-4 sticky left-0 z-10 w-full shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] tracking-widest">▼ 人員配置</div>
+          </div>
 
-                <div className="border-b-4 border-slate-500">
-                  {stamps.filter(s => s.type === 'site').map((site, sIndex) => {
-                    const bgClass = site.colorClass.split(' ').find(c => c.startsWith('bg-')) || 'bg-white';
-                    const textClass = site.colorClass.split(' ').find(c => c.startsWith('text-')) || 'text-slate-900';
-                    return (
-                      <div key={`site-${sIndex}`} className={`flex border-b border-slate-400 ${ROW_BGS[bgClass]} bg-opacity-60`}>
-                        <div className={`w-32 md:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex flex-col justify-center items-center sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] ${bgClass}`}>
-                          {viewMode === 'edit' ? (
-                            <button onClick={() => setEditingStamp(site)} className={`text-[11px] md:text-xs px-1 pt-1.5 pb-2 rounded w-full text-center border-2 bg-white/95 ${textClass} hover:ring-2 ring-white shadow-sm transition-all font-black leading-snug fix-clip`}>{site.name}</button>
-                          ) : (
-                            <div className={`text-[11px] md:text-xs px-1 pt-1.5 pb-2 rounded w-full text-center border-2 bg-white/95 ${textClass} font-black leading-snug fix-clip`}>{site.name}</div>
-                          )}
-                        </div>
-                        {currentDates.map((d, dIndex) => {
-                          const taskData = siteSchedule[`${site.name}-${d.date}`];
-                          const isToday = d.date === todayStr;
-                          return (
-                            <div key={dIndex} onClick={() => handleSiteCellClick(site.name, d.date)} className={`w-20 md:w-24 flex-shrink-0 p-1 flex items-center justify-center relative ${isToday ? 'border-r-2 border-red-500 bg-red-500/10 z-10' : 'border-r border-slate-400/30'} ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''}`} style={{ minHeight: '3.8rem' }}>
-                              {taskData && taskData.text && (
-                                <div className={`text-[11px] md:text-xs font-black text-center site-task-text drop-shadow-sm fix-clip ${taskData.isRed ? 'text-red-700 underline underline-offset-4 decoration-2' : 'text-slate-900'}`}>{taskData.text}</div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
-                  <div className="bg-slate-700 text-white text-[10px] font-bold py-1 px-4 tracking-widest shadow-inner">▼ 人員配置</div>
+          {peopleList.map((person, pIndex) => {
+            const pColorClass = personColors[person] || '';
+            const pBg = pColorClass.split(' ').find(c => c.startsWith('bg-')) || 'bg-slate-200';
+            const pRowBgClass = ROW_BGS[pBg] || 'bg-white';
+            const pTextColorClass = pColorClass.split(' ').find(c => c.startsWith('text-')) || 'text-slate-800';
+            return (
+              <div key={pIndex} className={`flex border-b border-slate-300 transition-colors ${pRowBgClass} hover:brightness-95`}>
+                <div onClick={() => viewMode === 'edit' && setSelectedPersonForColor(person)} className={`w-32 md:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] text-[11px] md:text-sm ${viewMode === 'edit' ? 'cursor-pointer' : ''} ${pBg} ${pTextColorClass}`}>
+                  <span className="truncate pr-1">{person} 様</span>{viewMode === 'edit' && <span className="ml-auto text-[10px] opacity-40">🎨</span>}
                 </div>
-
-                {peopleList.map((person, pIndex) => {
-                  const pColorClass = personColors[person] || '';
-                  const pBg = pColorClass.split(' ').find(c => c.startsWith('bg-')) || 'bg-slate-200';
-                  const pTextColorClass = pColorClass.split(' ').find(c => c.startsWith('text-')) || 'text-slate-900';
+                {currentDates.map((d, dIndex) => {
+                  const cellData = schedule[`${person}-${d.date}`];
+                  const isToday = d.date === todayStr;
                   return (
-                    <div key={pIndex} className={`flex border-b border-slate-300 transition-colors ${ROW_BGS[pBg]} bg-opacity-50 hover:brightness-95`}>
-                      <div onClick={() => viewMode === 'edit' && setSelectedPersonForColor(person)} className={`w-32 md:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] text-[11px] md:text-sm ${viewMode === 'edit' ? 'cursor-pointer' : ''} ${pBg} ${pTextColorClass}`}>
-                        <span className="pr-1 font-black flex-1 fix-clip">{person} 様</span>{viewMode === 'edit' && <span className="ml-auto text-[10px] opacity-40">🎨</span>}
-                      </div>
-                      {currentDates.map((d, dIndex) => {
-                        const cellDataArray = schedule[`${person}-${d.date}`] || [];
-                        const isToday = d.date === todayStr;
-                        return (
-                          <div key={dIndex} onClick={() => handlePersonCellClick(person, d.date)} className={`w-20 md:w-24 flex-shrink-0 p-1 flex items-stretch justify-center relative ${isToday ? 'border-r-2 border-red-500 bg-red-500/10 z-10' : 'border-r border-slate-400/20'} ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''}`} style={{ minHeight: '5.2rem' }}>
-                            {cellDataArray.length > 0 && (
-                              <div className="flex flex-col gap-1 w-full justify-center">
-                                {cellDataArray.map((task, idx) => (
-                                  <div key={idx} className={`flex flex-col px-1 pt-1 pb-1.5 rounded-md border-2 shadow-sm ${getStampColor(task.siteName)}`} style={{ minHeight: '1.5rem' }}>
-                                    <div className="flex items-center justify-between gap-0.5">
-                                      {task.time && task.time !== '終日' && <span className="text-[7.5px] font-black bg-white/70 px-0.5 py-0.5 rounded border border-black/10 fix-clip whitespace-nowrap">{task.time}</span>}
-                                      <span className="text-[10px] md:text-[11px] font-black text-center flex-1 fix-clip">{task.siteName}</span>
-                                    </div>
-                                    {task.memo && <span className="text-[7.5px] md:text-[8.5px] font-bold opacity-95 text-center mt-1 border-t-2 border-black/5 pt-1 fix-clip">{task.memo}</span>}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                    <div key={dIndex} onClick={() => handlePersonCellClick(person, d.date)} className={`w-20 md:w-24 flex-shrink-0 p-1 flex items-stretch justify-center relative ${isToday ? 'border-r-2 border-red-500 bg-red-500/10 z-10' : 'border-r border-slate-300/40'} ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''}`} style={{ minHeight: '4rem' }}>
+                      {cellData && (
+                        <div className={`flex flex-col items-center justify-center w-full h-full p-1 rounded border shadow-sm ${getStampColor(cellData.siteName)}`}>
+                          <span className="text-[10px] md:text-[11px] font-bold leading-tight text-center">{cellData.siteName}</span>
+                          {cellData.memo && <span className="mt-1 pt-1 border-t border-black/10 w-full text-center text-[9px] leading-tight opacity-90 break-all">{cellData.memo}</span>}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
-              
-              <div className="mt-6 pb-4 w-full">
-                <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4 w-full shadow-md">
-                  <h3 className="font-bold text-yellow-900 mb-2 flex items-center text-sm md:text-base"><span className="mr-2 text-lg">📝</span> 備考・全体連絡</h3>
-                  {viewMode === 'edit' ? (
-                    <textarea value={globalMemo} onChange={(e) => setGlobalMemo(e.target.value)} onBlur={() => updateCloud({ globalMemo })} placeholder="全体連絡事項を入力..." className="w-full bg-white border-2 border-yellow-200 rounded-xl p-3 text-sm outline-none focus:ring-2 focus:ring-yellow-400 font-bold" rows={3}/>
-                  ) : (
-                    <div className="whitespace-pre-wrap text-sm text-slate-900 font-bold p-1 min-h-[3rem] fix-clip">{globalMemo || "（備考なし）"}</div>
-                  )}
-                </div>
-              </div>
+            );
+          })}
+        </div>
+        
+        <div className="mt-4 min-w-max pb-8">
+          <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-3 w-full max-w-4xl shadow-sm">
+            <h3 className="font-bold text-yellow-800 mb-2 flex items-center text-sm md:text-base"><span className="mr-2">📝</span> 備考・連絡事項</h3>
+            {viewMode === 'edit' ? (
+              <textarea value={globalMemo} onChange={(e) => setGlobalMemo(e.target.value)} onBlur={() => updateCloud({ globalMemo })} placeholder="全体連絡事項を入力..." className="w-full bg-white border border-yellow-200 rounded p-2 text-sm outline-none focus:ring-2 focus:ring-yellow-400" rows={3}/>
+            ) : (
+              <div className="whitespace-pre-wrap text-sm text-slate-800 p-2 min-h-[3rem]">{globalMemo || "（備考なし）"}</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Popups */}
+      {selectedPersonCell && (
+        <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-50 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-md rounded-2xl p-4 shadow-2xl animate-[slideUp_0.3s_ease-out]">
+            <h3 className="font-bold text-lg text-slate-800 border-b pb-2 mb-4">{selectedPersonCell.date} : {selectedPersonCell.person} 様</h3>
+            <div className="mb-4"><label className="block text-xs font-bold text-slate-700 mb-1">✏️ 作業メモ</label>
+            <input type="text" value={memoInput} onChange={(e) => setMemoInput(e.target.value)} className="w-full border-2 border-slate-200 rounded-lg p-3 text-sm focus:border-blue-500 outline-none" placeholder="作業内容など"/></div>
+            <div className="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto pb-4">
+              {stamps.map(s => <button key={s.id} onClick={() => handleStampClick(s.name)} className={`p-3 rounded-lg border-2 font-bold text-sm ${s.colorClass}`}>{s.name}</button>)}
+              <button onClick={() => handleStampClick('空欄にする')} className="p-3 rounded-lg border-2 font-bold text-sm bg-slate-100 border-slate-200">クリア</button>
+            </div>
+            <button onClick={() => setSelectedPersonCell(null)} className="w-full mt-2 py-2 text-slate-400 text-xs font-bold font-sans">閉じる</button>
+          </div>
+        </div>
+      )}
+
+      {selectedSiteCell && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-sm rounded-2xl p-5 shadow-2xl animate-[scaleIn_0.2s_ease-out]">
+            <h3 className="font-bold text-lg text-slate-800 border-b pb-2 mb-4">{selectedSiteCell.date} : {selectedSiteCell.siteName}</h3>
+            <textarea value={siteTaskInput} onChange={(e) => setSiteTaskInput(e.target.value)} className="w-full border-2 border-slate-200 rounded-lg p-3 text-sm focus:border-yellow-500 outline-none" rows={3} placeholder="この日の全体工程..."/>
+            <div className="mt-4 flex gap-2"><button onClick={() => {setSiteTaskInput(''); saveSiteTask();}} className="flex-1 bg-slate-100 py-3 rounded-lg font-bold">クリア</button><button onClick={saveSiteTask} className="flex-1 bg-yellow-500 text-white py-3 rounded-lg font-bold">決定</button></div>
+          </div>
+        </div>
+      )}
+
+      {isStampSettingOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-2 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-lg rounded-2xl p-4 shadow-2xl max-h-[90vh] overflow-y-auto animate-[scaleIn_0.2s_ease-out]">
+            <div className="flex justify-between items-center mb-6 border-b pb-3"><h2 className="font-bold text-xl font-sans">⚙️ スタンプ工房</h2><button onClick={() => setIsStampSettingOpen(false)} className="bg-slate-100 w-10 h-10 rounded-full font-bold">✕</button></div>
+            <div className="bg-slate-50 p-4 rounded-xl mb-6 border border-slate-200">
+              <div className="flex gap-2 mb-3"><input type="text" value={newStampName} onChange={(e) => setNewStampName(e.target.value)} placeholder="名前" className="flex-1 border-2 border-slate-300 rounded-lg p-2 text-sm"/><select value={newStampType} onChange={(e) => setNewStampType(e.target.value)} className="border-2 border-slate-300 rounded-lg p-2 text-sm bg-white"><option value="site">現場</option><option value="status">状態</option></select></div>
+              <div className="flex flex-wrap gap-2 mb-3">{COLOR_PRESETS.map(p => <div key={p.id} onClick={() => setNewStampColor(p.class)} className={`w-8 h-8 rounded-full border-2 cursor-pointer ${p.class.split(' ')[0]} ${newStampColor === p.class ? 'ring-2 ring-offset-2 ring-blue-500' : 'border-slate-300'}`}/>)}</div>
+              <button onClick={addNewStamp} className="w-full bg-blue-600 text-white font-bold py-2 rounded-lg">追加</button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">{stamps.map(s => <div key={s.id} className="flex justify-between items-center p-2 border rounded-lg"><div className={`px-2 py-1 rounded text-xs font-bold border ${s.colorClass}`}>{s.name}</div><button onClick={() => deleteStamp(s.id)} className="text-red-500 text-xs font-bold">削除</button></div>)}</div>
+          </div>
+        </div>
+      )}
+
+      {selectedPersonForColor && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-sm rounded-2xl p-5 shadow-2xl animate-[scaleIn_0.2s_ease-out]">
+            <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg text-slate-800">{selectedPersonForColor} 様の色</h3><button onClick={() => setSelectedPersonForColor(null)} className="bg-slate-100 w-8 h-8 rounded-full font-bold font-sans">✕</button></div>
+            <div className="grid gap-2">
+              <button onClick={() => handlePersonColorClick('bg-slate-200 text-slate-800')} className="p-3 rounded-xl border-2 font-bold text-sm bg-slate-200">標準 (グレー)</button>
+              {COLOR_PRESETS.map((c, i) => <button key={i} onClick={() => handlePersonColorClick(c.class)} className={`p-3 rounded-xl border-2 font-bold text-sm ${c.class}`}>選択</button>)}
             </div>
           </div>
-
-          {/* --- スマホ用画像プレビュー・長押し保存用 --- */}
-          {previewImage && (
-            <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-4 img-preview-overlay animate-[fadeIn_0.2s_ease]">
-              <div className="bg-white p-2 rounded-2xl shadow-2xl max-w-full max-h-[80vh] overflow-auto relative">
-                <button onClick={() => setPreviewImage(null)} className="absolute top-2 right-2 bg-black/50 text-white w-10 h-10 rounded-full font-bold text-2xl z-10">×</button>
-                <img src={previewImage} alt="Preview" className="max-w-none h-auto select-all" />
-              </div>
-              <div className="mt-6 text-center text-white">
-                <p className="font-black text-lg mb-2">📸 画像が作成されました！</p>
-                <p className="bg-white/20 px-6 py-3 rounded-full font-bold">画像を【長押し】して「写真に保存」してください</p>
-                <button onClick={() => setPreviewImage(null)} className="mt-8 text-white/70 underline font-bold">閉じて編集に戻る</button>
-              </div>
-            </div>
-          )}
-
-          {/* ❓ 使い方ガイド */}
-          {isHelpOpen && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 backdrop-blur-md animate-[fadeIn_0.2s_ease]">
-              <div className="bg-white w-full max-w-lg rounded-2xl p-6 shadow-2xl max-h-[85vh] overflow-y-auto">
-                <div className="flex justify-between items-center border-b-2 pb-3 mb-4"><h2 className="font-bold text-xl flex items-center gap-2">📖 使い方ガイド</h2><button onClick={() => setIsHelpOpen(false)} className="bg-slate-100 w-10 h-10 rounded-full font-bold text-slate-500">×</button></div>
-                <div className="space-y-6 text-sm leading-relaxed font-medium">
-                  <section><h3 className="font-bold text-blue-700 mb-2 underline decoration-2">🏢 名前・タイトルの変更</h3><p>表の左側にある【現場名】や【職人名】、表の上の【タイトル】を直接タップすると、その場で編集できます。</p></section>
-                  <section><h3 className="font-bold text-blue-700 mb-2 underline decoration-2">👤 予定を入れる</h3><p>マスをタップして現場を1つ選ぶだけ！複数現場ある場合は下の「詳細入力」ボタンで切り替えます。</p></section>
-                  <section><h3 className="font-bold text-blue-700 mb-2 underline decoration-2">🏗 工程表の記号</h3><p>「🔴重要」で赤字・強調、「➡︎」ボタンで矢印記号が簡単に入ります。</p></section>
-                  <section><h3 className="font-bold text-blue-700 mb-2 underline decoration-2">📸 スマホでの画像保存</h3><p>「LINE送信」モードで緑のボタンを押し、表示された画像を【長押し】して保存してください。</p></section>
-                </div>
-                <button onClick={() => setIsHelpOpen(false)} className="w-full mt-6 py-4 bg-slate-800 text-white rounded-xl font-bold shadow-lg">閉じる</button>
-              </div>
-            </div>
-          )}
-
-          {/* 👥 人員現場入力 */}
-          {selectedPersonCell && (
-            <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-50 backdrop-blur-sm p-2 md:p-4">
-              <div className="bg-white w-full max-w-md rounded-t-3xl p-4 shadow-2xl animate-[slideUp_0.3s_ease-out] border-t-4 border-blue-500">
-                <div className="flex justify-between items-center border-b-2 pb-2 mb-4">
-                  <h3 className="font-bold text-lg text-slate-800">{selectedPersonCell.date} : {selectedPersonCell.person} 様</h3>
-                  <button onClick={() => setSelectedPersonCell(null)} className="text-slate-400 text-2xl font-bold">×</button>
-                </div>
-                {!isMultiMode ? (
-                  <div className="space-y-4">
-                    <p className="text-xs font-bold text-slate-500 bg-slate-100 p-2 rounded-lg text-center">🏢 行き先（スタンプ）を1回選ぶだけ！</p>
-                    <div className="grid grid-cols-2 gap-2.5 max-h-64 overflow-y-auto no-scrollbar pb-2 px-1">
-                      {stamps.map(s => (
-                        <button key={s.id} onClick={() => handleQuickSiteSelect(s.name)} className={`p-4 rounded-2xl border-2 font-black text-sm shadow-md active:scale-95 transition-transform ${s.colorClass}`}>{s.name}</button>
-                      ))}
-                      <button onClick={() => handleQuickSiteSelect('')} className="p-4 rounded-2xl border-2 font-bold text-sm bg-white text-slate-400 border-slate-200">空欄にする</button>
-                    </div>
-                    <button onClick={() => setIsMultiMode(true)} className="w-full py-4 bg-blue-50 text-blue-700 rounded-2xl text-xs font-black border-2 border-blue-200 shadow-inner">+ 複数現場・メモを入力</button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex gap-1.5 px-1">
-                      {[0, 1, 2].map(idx => (
-                        <button key={idx} onClick={() => setActiveTaskIndex(idx)} className={`flex-1 py-2 rounded-xl border-2 transition-all flex flex-col items-center ${activeTaskIndex === idx ? 'border-blue-600 bg-blue-50 ring-2 ring-blue-100 shadow-sm' : 'border-slate-100 bg-slate-50 opacity-60'}`}>
-                          <span className="text-[10px] text-slate-500 font-bold">{tempTasks[idx]?.time || '枠'+(idx+1)}</span>
-                          <span className="text-[10px] font-black truncate w-full px-1 text-center">{tempTasks[idx]?.siteName || 'なし'}</span>
-                        </button>
-                      ))}
-                    </div>
-                    <div className="bg-blue-50 p-3 rounded-2xl border-2 border-blue-200 shadow-inner">
-                      <div className="flex gap-2 mb-3">
-                        <select value={tempTasks[activeTaskIndex]?.time || ''} onChange={e => handleTempTaskChange('time', e.target.value)} className="w-1/3 border-2 border-blue-300 p-2 rounded-xl text-xs bg-white font-black text-blue-800 outline-none">
-                          <option value="終日">終日</option><option value="AM">AM</option><option value="PM">PM</option><option value="夜間">夜間</option><option value="残業">残業</option><option value="">なし</option>
-                        </select>
-                        <input type="text" value={tempTasks[activeTaskIndex]?.memo || ''} onChange={e => handleTempTaskChange('memo', e.target.value)} className="flex-1 border-2 border-blue-300 rounded-xl p-2 text-xs font-bold outline-none focus:ring-2 ring-blue-400" placeholder="メモを入力..."/>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto no-scrollbar px-0.5">
-                        {stamps.map(s => <button key={s.id} onClick={() => handleTempTaskChange('siteName', s.name)} className={`p-2.5 rounded-xl border-2 font-black text-[10px] shadow-sm ${s.colorClass}`}>{s.name}</button>)}
-                        <button onClick={() => { handleTempTaskChange('siteName', ''); handleTempTaskChange('memo', ''); }} className="p-2.5 rounded-xl border-2 text-[10px] font-bold bg-white text-slate-400 border-slate-200">枠を空ける</button>
-                      </div>
-                    </div>
-                    <div className="flex gap-3 px-1 pb-2">
-                      <button onClick={() => setIsMultiMode(false)} className="px-5 py-4 bg-slate-100 text-slate-500 rounded-2xl font-bold text-xs">戻る</button>
-                      <button onClick={savePersonTasks} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black shadow-lg shadow-blue-200 active:scale-95 transition-transform">保存する</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* 🏷️ 名前・現場名直接編集 */}
-          {editingStamp && (
-            <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-[fadeIn_0.2s_ease]">
-              <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-[scaleIn_0.2s_ease-out] border-t-4 border-blue-500">
-                <h3 className="font-bold text-lg text-slate-800 border-b-2 pb-3 mb-6">名前を書き換える</h3>
-                <input type="text" defaultValue={editingStamp.name} id="edit-stamp-input" className="w-full border-2 border-blue-500 rounded-2xl p-4 text-xl font-black shadow-inner focus:ring-4 ring-blue-100 outline-none text-center" autoFocus onKeyDown={(e) => e.key === 'Enter' && saveEditedStampName(editingStamp.id, e.target.value)}/>
-                <div className="mt-8 flex gap-3">
-                  <button onClick={() => setEditingStamp(null)} className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl font-bold">やめる</button>
-                  <button onClick={() => saveEditedStampName(editingStamp.id, document.getElementById('edit-stamp-input').value)} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black shadow-lg active:scale-95 transition-transform">更新する</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 🏗️ 現場工程入力 */}
-          {selectedSiteCell && (
-            <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-              <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-[scaleIn_0.2s_ease-out] border-t-4 border-yellow-500">
-                <h3 className="font-bold text-lg text-slate-800 border-b-2 pb-3 mb-4">{selectedSiteCell.date} : {selectedSiteCell.siteName}</h3>
-                <div className="flex gap-2 mb-4">
-                  <button onClick={() => setIsSiteTaskRed(!isSiteTaskRed)} className={`flex-1 py-2.5 text-xs font-black rounded-xl border-2 transition-colors ${isSiteTaskRed ? 'bg-red-600 border-red-600 text-white shadow-lg' : 'bg-white border-red-300 text-red-600'}`}>{isSiteTaskRed ? '✅ 重要(赤字)' : '🔴 重要(赤字)'}</button>
-                  <button onClick={() => setSiteTaskInput(p => p + ' ➡︎')} className="px-5 py-2.5 text-sm font-black bg-slate-100 border-2 border-slate-300 rounded-xl text-slate-700 active:bg-slate-200 shadow-sm">➡︎</button>
-                  <button onClick={() => setSiteTaskInput(p => p + ' ━━')} className="px-5 py-2.5 text-sm font-black bg-slate-100 border-2 border-slate-300 rounded-xl text-slate-700 active:bg-slate-200 shadow-sm">━━</button>
-                </div>
-                <textarea value={siteTaskInput} onChange={(e) => setSiteTaskInput(e.target.value)} className={`w-full border-2 border-slate-300 rounded-2xl p-4 text-sm shadow-inner focus:border-yellow-500 outline-none font-bold ${isSiteTaskRed ? 'text-red-700 underline underline-offset-4 decoration-2' : 'text-slate-900'}`} rows={3} placeholder="予定を入力..."/>
-                <div className="mt-6 flex gap-3">
-                  <button onClick={() => {setSiteTaskInput(''); setIsSiteTaskRed(false); saveSiteTask();}} className="flex-1 bg-slate-100 py-4 rounded-2xl font-bold text-slate-500">リセット</button>
-                  <button onClick={saveSiteTask} className="flex-1 bg-yellow-500 text-white py-4 rounded-2xl font-black shadow-lg active:scale-95 transition-transform">決定</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ⚙️ 設定 */}
-          {isStampSettingOpen && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-2 md:p-4 backdrop-blur-sm animate-[fadeIn_0.2s_ease]">
-              <div className="bg-white w-full max-w-lg rounded-3xl p-4 md:p-6 shadow-2xl max-h-[90vh] overflow-y-auto animate-[scaleIn_0.2s_ease-out]">
-                <div className="flex justify-between items-center mb-6 border-b-2 pb-3"><h2 className="font-black text-xl">⚙️ スケジュール設定</h2><button onClick={() => setIsStampSettingOpen(false)} className="bg-slate-100 w-10 h-10 rounded-full font-bold text-slate-400">×</button></div>
-                <div className="bg-slate-50 p-4 rounded-2xl mb-6 border-2 border-slate-200 shadow-inner">
-                  <p className="text-xs font-black text-slate-500 mb-3">✨ 新しい現場・スタンプを登録</p>
-                  <div className="flex gap-2 mb-4"><input type="text" value={newStampName} onChange={(e) => setNewStampName(e.target.value)} placeholder="名前を入力" className="flex-1 border-2 border-slate-300 rounded-xl p-3 text-sm font-bold outline-none focus:border-blue-500"/><select value={newStampType} onChange={(e) => setNewStampType(e.target.value)} className="border-2 border-slate-300 rounded-xl p-3 text-sm bg-white font-black"><option value="site">🏢 現場</option><option value="status">📌 状態(休等)</option></select></div>
-                  <div className="flex flex-wrap gap-2.5 mb-5 px-1">{COLOR_PRESETS.map(p => <div key={p.id} onClick={() => setNewStampColor(p.class)} className={`w-10 h-10 rounded-full border-2 cursor-pointer transition-all ${p.class.split(' ')[0]} ${newStampColor === p.class ? 'ring-2 ring-offset-2 ring-blue-500 scale-110' : 'border-slate-300 shadow-md'}`}/>)}</div>
-                  <button onClick={addNewStamp} className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-transform">追加する</button>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 px-1">{stamps.map(s => <div key={s.id} className="flex justify-between items-center p-3.5 border-2 rounded-2xl bg-white shadow-sm"><div className={`px-2 py-1 rounded text-xs font-black border ${s.colorClass}`}>{s.name}</div><button onClick={() => deleteStamp(s.id)} className="text-red-500 text-xs font-bold hover:bg-red-50 px-3 py-2 rounded-xl border border-transparent active:border-red-200">削除</button></div>)}</div>
-              </div>
-            </div>
-          )}
-
-          {/* 🎨 人員色分け */}
-          {selectedPersonForColor && (
-            <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-[fadeIn_0.2s_ease]">
-              <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl animate-[scaleIn_0.2s_ease-out] border-t-4 border-slate-400">
-                <div className="flex justify-between items-center mb-4"><h3 className="font-black text-lg text-slate-800">{selectedPersonForColor} 様の色</h3><button onClick={() => setSelectedPersonForColor(null)} className="bg-slate-100 w-10 h-10 rounded-full font-bold text-slate-400">×</button></div>
-                <div className="grid grid-cols-2 gap-2.5 max-h-80 overflow-y-auto no-scrollbar pb-4 px-1 pt-2">
-                  <button onClick={() => handlePersonColorClick('bg-white text-slate-800')} className="col-span-2 p-5 rounded-2xl border-2 font-black text-sm bg-white shadow-md mb-2 text-center active:scale-95 transition-transform">白色 (リセット) に戻す</button>
-                  {COLOR_PRESETS.filter(c => c.id !== 'white').map((c, i) => (
-                    <button key={i} onClick={() => handlePersonColorClick(c.class)} className={`p-4 rounded-2xl border-2 font-black text-[10px] md:text-xs shadow-md transition-transform active:scale-95 text-center ${c.class}`}>選択</button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 👤 人員管理 */}
-          {isPersonSettingOpen && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-2 md:p-4 backdrop-blur-sm">
-              <div className="bg-white w-full max-w-md rounded-3xl p-4 md:p-6 shadow-2xl max-h-[90vh] flex flex-col animate-[scaleIn_0.2s_ease-out]">
-                <div className="flex justify-between items-center mb-6 border-b-2 pb-3"><h2 className="font-black text-xl tracking-tighter">👤 人員の名簿管理</h2><button onClick={() => setIsPersonSettingOpen(false)} className="bg-slate-100 w-10 h-10 rounded-full font-bold text-slate-400">×</button></div>
-                <div className="flex gap-2 mb-6 bg-slate-50 p-3 rounded-2xl border-2 border-slate-200 shadow-inner"><input type="text" value={newPersonName} onChange={(e) => setNewPersonName(e.target.value)} placeholder="名前を入力" className="flex-1 border-2 border-slate-300 rounded-xl p-3 text-sm font-bold outline-none focus:border-blue-500"/><button onClick={addPerson} className="bg-blue-600 text-white font-black px-6 py-2 rounded-xl shadow-lg active:scale-95 transition-transform">追加</button></div>
-                <div className="flex-1 overflow-y-auto space-y-2.5 no-scrollbar pb-4 px-1">
-                  {peopleList.map((p, i) => (
-                    <div key={i} className="flex items-center justify-between p-4 border-2 border-slate-200 rounded-2xl bg-white shadow-sm">
-                      <div className="font-black text-slate-800 flex-1 truncate"><span className="text-slate-400 mr-2 text-xs font-bold">{i+1}.</span>{p}</div>
-                      <div className="flex gap-1.5">
-                        <button onClick={() => movePerson(i, 'up')} className="w-9 h-9 bg-slate-100 hover:bg-slate-200 rounded-xl text-[10px] font-black shadow-inner">▲</button>
-                        <button onClick={() => movePerson(i, 'down')} className="w-9 h-9 bg-slate-100 hover:bg-slate-200 rounded-xl text-[10px] font-black shadow-inner">▼</button>
-                        <button onClick={() => deletePerson(i)} className="w-11 h-11 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl ml-1.5 flex items-center justify-center border border-red-100">🗑️</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={() => setIsPersonSettingOpen(false)} className="w-full mt-4 py-4 bg-slate-800 text-white rounded-2xl font-black shadow-lg active:scale-95 transition-transform">完了</button>
-              </div>
-            </div>
-          )}
-
-          <style dangerouslySetInnerHTML={{__html: `@keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } } @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } } @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }`}} />
         </div>
-      );
-    }
+      )}
 
-    const root = createRoot(document.getElementById('root'));
-    root.render(<App />);
-  </script>
-</body>
-</html>
+      {isPersonSettingOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-2 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-2xl p-4 shadow-2xl max-h-[90vh] flex flex-col animate-[scaleIn_0.2s_ease-out]">
+            <div className="flex justify-between items-center mb-4 border-b pb-3"><h2 className="font-bold text-xl font-sans">👤 人員管理</h2><button onClick={() => setIsPersonSettingOpen(false)} className="bg-slate-100 w-10 h-10 rounded-full font-bold">✕</button></div>
+            <div className="flex gap-2 mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200"><input type="text" value={newPersonName} onChange={(e) => setNewPersonName(e.target.value)} placeholder="名前" className="flex-1 border-2 border-slate-300 rounded-lg p-2 text-sm"/><button onClick={addPerson} className="bg-blue-600 text-white font-bold px-4 py-2 rounded-lg">追加</button></div>
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {peopleList.map((p, i) => (
+                <div key={i} className="flex items-center justify-between p-2 border border-slate-200 rounded-lg bg-white"><div className="font-bold text-slate-800 flex-1 truncate">{i+1}. {p}</div><div className="flex gap-1"><button onClick={() => movePerson(i, 'up')} className="w-6 h-6 bg-slate-100 rounded text-xs">▲</button><button onClick={() => movePerson(i, 'down')} className="w-6 h-6 bg-slate-100 rounded text-xs">▼</button><button onClick={() => deletePerson(i)} className="w-8 h-8 bg-red-50 text-red-600 rounded">🗑️</button></div></div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style dangerouslySetInnerHTML={{__html: `@keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } } @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }`}} />
+    </div>
+  );
+}
