@@ -18,9 +18,10 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect } = React;
 
+    // ★修正: deleteField を新しく読み込むようにしました
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js';
     import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js';
-    import { getFirestore, doc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js';
+    import { getFirestore, doc, setDoc, onSnapshot, deleteField } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js';
 
     const firebaseConfig = {
       apiKey: "AIzaSyAO6OY-QQ52dByAeOwa2q14TkzGADYCsnA",
@@ -31,7 +32,6 @@
       appId: "1:893090658248:web:624450db548af18ba3f2fd"
     };
 
-    // 2026年の主な祝日リスト（簡易版）
     const HOLIDAYS_2026 = [
       '1/1', '1/12', '2/11', '2/23', '3/20', '4/29', '5/3', '5/4', '5/5', '5/6',
       '7/20', '8/11', '9/21', '9/22', '9/23', '10/12', '11/3', '11/23'
@@ -179,7 +179,6 @@
         d.setDate(startDate.getDate() + i);
         const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
         const dayStr = ['日','月','火','水','木','金','土'][d.getDay()];
-        // 日曜日、または祝日リストに含まれているかを判定
         const isHoliday = d.getDay() === 0 || HOLIDAYS_2026.includes(dateStr);
         return { date: dateStr, day: dayStr, isHoliday: isHoliday };
       });
@@ -232,22 +231,33 @@
         newPeopleList[index] = newName;
 
         const newPersonColors = { ...personColors };
+        const personColorUpdates = {};
         if (newPersonColors[oldName]) {
           newPersonColors[newName] = newPersonColors[oldName];
+          personColorUpdates[newName] = newPersonColors[oldName];
+          personColorUpdates[oldName] = deleteField(); // ★修正: 古い色の設定を完全に削除
           delete newPersonColors[oldName];
         }
 
         const newSchedule = { ...schedule };
+        const scheduleUpdates = {};
         Object.keys(newSchedule).forEach(key => {
           if (key.startsWith(`${oldName}-`)) {
             const datePart = key.replace(`${oldName}-`, '');
             newSchedule[`${newName}-${datePart}`] = newSchedule[key];
+            scheduleUpdates[`${newName}-${datePart}`] = newSchedule[key];
+            scheduleUpdates[key] = deleteField(); // ★修正: 古い名前の予定を完全に削除
             delete newSchedule[key];
           }
         });
 
         setPeopleList(newPeopleList); setPersonColors(newPersonColors); setSchedule(newSchedule);
-        updateCloud({ peopleList: newPeopleList, personColors: newPersonColors, schedule: newSchedule });
+        
+        const cloudPayload = { peopleList: newPeopleList };
+        if (Object.keys(personColorUpdates).length > 0) cloudPayload.personColors = personColorUpdates;
+        if (Object.keys(scheduleUpdates).length > 0) cloudPayload.schedule = scheduleUpdates;
+        
+        updateCloud(cloudPayload);
         setEditingPersonIndex(null);
       };
 
@@ -260,10 +270,16 @@
       const saveSiteTask = () => {
         const key = `${selectedSiteCell.siteName}-${selectedSiteCell.date}`;
         const newSiteSchedule = { ...siteSchedule };
-        if (!siteTaskInput.trim()) delete newSiteSchedule[key];
-        else newSiteSchedule[key] = siteTaskInput.trim();
-        setSiteSchedule(newSiteSchedule);
-        updateCloud({ siteSchedule: newSiteSchedule });
+        
+        if (!siteTaskInput.trim()) {
+          delete newSiteSchedule[key];
+          setSiteSchedule(newSiteSchedule);
+          updateCloud({ siteSchedule: { [key]: deleteField() } }); // ★修正: メモを空にしたらクラウドからも完全削除
+        } else {
+          newSiteSchedule[key] = siteTaskInput.trim();
+          setSiteSchedule(newSiteSchedule);
+          updateCloud({ siteSchedule: { [key]: siteTaskInput.trim() } });
+        }
         setSelectedSiteCell(null);
       };
 
@@ -289,6 +305,8 @@
         
         if (stampName === '空欄にする') {
           delete newSchedule[key];
+          setSchedule(newSchedule);
+          updateCloud({ schedule: { [key]: deleteField() } }); // ★修正: クラウドからも完全に削除する司令を出す
         } else {
           const newItem = { siteName: stampName, memo: memoInput.trim(), time: selectedTime };
           
@@ -304,10 +322,10 @@
               newSchedule[key] = [newItem];
             }
           }
+          setSchedule(newSchedule);
+          // ★修正: クラウドには「新しく更新した部分だけ」を送信する
+          updateCloud({ schedule: { [key]: newSchedule[key] } });
         }
-        
-        setSchedule(newSchedule);
-        updateCloud({ schedule: newSchedule });
         
         if (stampMode === 'overwrite' || stampName === '空欄にする') {
           setSelectedPersonCell(null);
@@ -321,10 +339,15 @@
 
       const handlePersonColorClick = (colorClass) => {
         const newColors = { ...personColors };
-        if (colorClass === 'bg-slate-200 text-slate-800') delete newColors[selectedPersonForColor];
-        else newColors[selectedPersonForColor] = colorClass;
-        setPersonColors(newColors);
-        updateCloud({ personColors: newColors });
+        if (colorClass === 'bg-slate-200 text-slate-800') {
+          delete newColors[selectedPersonForColor];
+          setPersonColors(newColors);
+          updateCloud({ personColors: { [selectedPersonForColor]: deleteField() } }); // ★修正: 標準に戻した時は完全削除
+        } else {
+          newColors[selectedPersonForColor] = colorClass;
+          setPersonColors(newColors);
+          updateCloud({ personColors: { [selectedPersonForColor]: colorClass } });
+        }
         setSelectedPersonForColor(null);
       };
 
@@ -407,18 +430,14 @@
           </div>
 
           <div className="p-2 md:p-4 flex-1 flex flex-col overflow-hidden">
-            {/* テーブル部分を独自のスクロール枠で囲み、ヘッダーと左列を固定します */}
             <div className="flex-1 bg-white rounded-lg shadow-lg border-2 border-slate-300 overflow-auto relative">
               
-              {/* 日付のヘッダー行 (縦スクロール時に上に固定) */}
               <div className="flex border-b-2 border-slate-500 bg-slate-100 sticky top-0 z-20 shadow-sm min-w-max">
-                {/* 左上の角 (縦横どちらにも固定) */}
                 <div className="w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center justify-center sticky left-0 top-0 bg-slate-200 z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                   現場 / 氏名
                 </div>
                 {currentDates.map((d, i) => {
                   const isToday = d.date === todayStr;
-                  // 休日の場合は背景を薄い赤に、今日の表示色は「青色」に分けて見やすく変更
                   const headerBgClass = isToday ? 'bg-blue-100 border-b-2 border-blue-500' : (d.isHoliday ? 'bg-red-100' : 'bg-slate-50');
                   const dateColorClass = isToday ? 'text-blue-800' : (d.isHoliday ? 'text-red-600' : 'text-slate-800');
                   const dayColorClass = isToday ? 'text-blue-700' : (d.day === '土' ? 'text-blue-500' : (d.isHoliday ? 'text-red-500' : 'text-slate-500'));
@@ -440,12 +459,10 @@
                     const textClass = site.colorClass.split(' ').find(c => c.startsWith('text-'));
                     return (
                       <div key={`site-${sIndex}`} className={`flex border-b border-slate-400 ${rowBgClass}`}>
-                        {/* 現場名 (横スクロール時に左に固定) */}
                         <div className={`w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex flex-col justify-center items-center sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] bg-slate-200`}>
                           <div className={`text-[11px] md:text-xs p-1 rounded w-full text-center border bg-white/90 ${textClass}`}>{site.name}</div>
                         </div>
                         {currentDates.map((d, dIndex) => {
-                          // 現場全体の予定部分：休日は赤、今日は青
                           const isHoliday = d.isHoliday;
                           const isToday = d.date === todayStr;
                           const cellBgClass = isToday ? 'bg-blue-50' : (isHoliday ? 'bg-red-50' : '');
@@ -469,7 +486,6 @@
                   const pTextColorClass = pColorClass.split(' ').find(c => c.startsWith('text-')) || 'text-slate-800';
                   return (
                     <div key={pIndex} className={`flex border-b border-slate-400 transition-colors ${pRowBgClass} hover:brightness-95`}>
-                      {/* 人員名 (横スクロール時に左に固定) */}
                       <div onClick={() => viewMode === 'edit' && setSelectedPersonForColor(person)} className={`w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] text-[11px] md:text-sm ${viewMode === 'edit' ? 'cursor-pointer' : ''} ${pBg} ${pTextColorClass}`}>
                         <span className="truncate pr-1">{person} 様</span>{viewMode === 'edit' && <span className="ml-auto text-[10px] opacity-40">🎨</span>}
                       </div>
@@ -477,10 +493,8 @@
                         const cellData = schedule[`${person}-${d.date}`];
                         const isToday = d.date === todayStr;
                         const isHoliday = d.isHoliday;
-                        // 休日は赤色、今日は青色でハッキリ分ける
                         const cellBgClass = isToday ? 'bg-blue-50' : (isHoliday ? 'bg-red-50' : '');
                         
-                        // セルのアイテム数を確認
                         const cellItems = cellData ? (Array.isArray(cellData) ? cellData : [cellData]) : [];
                         const isSingle = cellItems.length === 1;
 
@@ -495,7 +509,6 @@
                               <div key={idx} className={`flex flex-col items-center justify-center w-full rounded border shadow-sm ${getStampColor(item.siteName)} ${isSingle ? 'p-2 h-full' : 'p-1'}`}>
                                 <div className="flex items-center justify-center gap-1">
                                   {item.time && <span className="text-[8px] bg-white/80 text-slate-800 px-1 rounded-sm font-bold shadow-sm whitespace-nowrap">{item.time}</span>}
-                                  {/* 1現場なら文字を少し大きく、複数現場なら小さく表示 */}
                                   <span className={`font-bold leading-tight text-center ${isSingle ? 'text-xs md:text-sm' : 'text-[10px] md:text-[11px]'}`}>{item.siteName}</span>
                                 </div>
                                 {item.memo && <span className={`mt-0.5 pt-0.5 border-t border-black/10 w-full text-center leading-tight opacity-90 break-all ${isSingle ? 'text-[10px]' : 'text-[9px]'}`}>{item.memo}</span>}
@@ -678,3 +691,5 @@
   </script>
 </body>
 </html>
+
+
