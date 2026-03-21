@@ -9,16 +9,17 @@
   
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- ★追加：画像を生成・保存するための魔法のライブラリ -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
-<body class="bg-gray-100 overflow-hidden">
+<body class="bg-gray-100">
   <div id="root"></div>
 
   <script type="text/babel" data-type="module">
     const { useState, useEffect } = React;
 
-    // ★修正: deleteField を新しく読み込むようにしました
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js';
     import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js';
     import { getFirestore, doc, setDoc, onSnapshot, deleteField } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js';
@@ -104,6 +105,10 @@
       const [authReady, setAuthReady] = useState(false);
       const [syncStatus, setSyncStatus] = useState('connecting');
       const [syncErrorMsg, setSyncErrorMsg] = useState('');
+      
+      // ★追加: 画像保存用の新しい状態
+      const [generatedImage, setGeneratedImage] = useState(null);
+      const [isGenerating, setIsGenerating] = useState(false);
 
       useEffect(() => {
         const app = initializeApp(firebaseConfig);
@@ -190,6 +195,32 @@
         setStartDate(new Date(today.setDate(diff)));
       };
 
+      // ★修正: スマホで確実に保存できるように「画面に画像を表示して長押し保存」させる方式に変更
+      const exportToImage = () => {
+        const target = document.getElementById('capture-area');
+        if (!target) return;
+        
+        setIsGenerating(true); // くるくるローディングを表示
+        window.scrollTo(0, 0); // ズレ防止
+        
+        // 描画が安定するのを少し待ってから画像化する
+        setTimeout(() => {
+          html2canvas(target, {
+            scale: 2, 
+            backgroundColor: '#f3f4f6', 
+            useCORS: true
+          }).then(canvas => {
+            const imgData = canvas.toDataURL('image/png');
+            setGeneratedImage(imgData); // 生成した画像を画面に表示する
+            setIsGenerating(false);
+          }).catch(err => {
+            console.error("画像保存エラー:", err);
+            alert("画像の生成に失敗しました。");
+            setIsGenerating(false);
+          });
+        }, 300);
+      };
+
       const addPerson = () => {
         if (!newPersonName.trim()) return;
         const newList = [...peopleList, newPersonName.trim()];
@@ -235,7 +266,7 @@
         if (newPersonColors[oldName]) {
           newPersonColors[newName] = newPersonColors[oldName];
           personColorUpdates[newName] = newPersonColors[oldName];
-          personColorUpdates[oldName] = deleteField(); // ★修正: 古い色の設定を完全に削除
+          personColorUpdates[oldName] = deleteField(); 
           delete newPersonColors[oldName];
         }
 
@@ -246,7 +277,7 @@
             const datePart = key.replace(`${oldName}-`, '');
             newSchedule[`${newName}-${datePart}`] = newSchedule[key];
             scheduleUpdates[`${newName}-${datePart}`] = newSchedule[key];
-            scheduleUpdates[key] = deleteField(); // ★修正: 古い名前の予定を完全に削除
+            scheduleUpdates[key] = deleteField(); 
             delete newSchedule[key];
           }
         });
@@ -274,7 +305,7 @@
         if (!siteTaskInput.trim()) {
           delete newSiteSchedule[key];
           setSiteSchedule(newSiteSchedule);
-          updateCloud({ siteSchedule: { [key]: deleteField() } }); // ★修正: メモを空にしたらクラウドからも完全削除
+          updateCloud({ siteSchedule: { [key]: deleteField() } }); 
         } else {
           newSiteSchedule[key] = siteTaskInput.trim();
           setSiteSchedule(newSiteSchedule);
@@ -306,7 +337,7 @@
         if (stampName === '空欄にする') {
           delete newSchedule[key];
           setSchedule(newSchedule);
-          updateCloud({ schedule: { [key]: deleteField() } }); // ★修正: クラウドからも完全に削除する司令を出す
+          updateCloud({ schedule: { [key]: deleteField() } }); 
         } else {
           const newItem = { siteName: stampName, memo: memoInput.trim(), time: selectedTime };
           
@@ -323,7 +354,6 @@
             }
           }
           setSchedule(newSchedule);
-          // ★修正: クラウドには「新しく更新した部分だけ」を送信する
           updateCloud({ schedule: { [key]: newSchedule[key] } });
         }
         
@@ -342,7 +372,7 @@
         if (colorClass === 'bg-slate-200 text-slate-800') {
           delete newColors[selectedPersonForColor];
           setPersonColors(newColors);
-          updateCloud({ personColors: { [selectedPersonForColor]: deleteField() } }); // ★修正: 標準に戻した時は完全削除
+          updateCloud({ personColors: { [selectedPersonForColor]: deleteField() } }); 
         } else {
           newColors[selectedPersonForColor] = colorClass;
           setPersonColors(newColors);
@@ -391,8 +421,42 @@
       }
 
       return (
-        <div className="h-screen bg-gray-100 font-sans text-sm md:text-base flex flex-col">
+        <div className={`${viewMode === 'edit' ? 'h-screen overflow-hidden' : 'min-h-screen'} bg-gray-100 font-sans text-sm md:text-base flex flex-col relative`}>
           
+          {/* ★追加: 画像生成中のくるくる表示 */}
+          {isGenerating && (
+            <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] backdrop-blur-sm">
+              <div className="bg-white p-6 rounded-2xl flex flex-col items-center shadow-2xl">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600 mb-4"></div>
+                <p className="font-bold text-slate-800 text-lg">画像を生成中...</p>
+                <p className="text-sm text-slate-500 mt-2">そのまま数秒お待ちください</p>
+              </div>
+            </div>
+          )}
+
+          {/* ★追加: 完成した画像を表示するポップアップ（ここで長押し保存してもらう） */}
+          {generatedImage && (
+            <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-[100] p-2 md:p-4 backdrop-blur-sm flex-col">
+              <div className="bg-white w-full max-w-3xl rounded-2xl overflow-hidden flex flex-col max-h-[95vh] shadow-2xl animate-[scaleIn_0.2s_ease-out]">
+                <div className="p-4 border-b bg-slate-50 flex justify-between items-start flex-shrink-0">
+                  <div>
+                    <h3 className="font-bold text-lg text-slate-800">📸 画像が完成しました！</h3>
+                    <div className="bg-red-100 border border-red-300 p-2 rounded mt-2">
+                      <p className="text-sm text-red-700 font-bold">※下の画像を【長押し】して「写真に追加（保存）」または「LINEで送る」を選んでください。</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setGeneratedImage(null)} className="bg-slate-200 hover:bg-slate-300 w-10 h-10 rounded-full font-bold transition-colors ml-2 flex-shrink-0">✕</button>
+                </div>
+                <div className="overflow-auto p-2 flex-1 bg-slate-300 flex justify-center">
+                  <img src={generatedImage} alt="スケジュール" className="max-w-full h-auto shadow-md" />
+                </div>
+                <div className="p-3 border-t bg-slate-50 flex-shrink-0">
+                  <button onClick={() => setGeneratedImage(null)} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-lg text-lg">閉じる</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {syncStatus === 'error' && (
             <div className="bg-red-600 text-white p-3 md:p-4 text-xs md:text-sm shadow-md z-50 flex-shrink-0">
               <div className="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
@@ -416,6 +480,12 @@
                     <button onClick={() => setIsStampSettingOpen(true)} className="bg-slate-600 text-white px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm active:scale-95 transition-transform">⚙️ スタンプ</button>
                   </>
                 )}
+                {/* ★追加：プレビューモードの時だけ画像保存ボタンを表示 */}
+                {viewMode === 'preview' && (
+                  <button onClick={exportToImage} className="bg-green-500 hover:bg-green-600 text-white px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm active:scale-95 transition-transform whitespace-nowrap flex items-center gap-1 border border-green-400">
+                    💾 画像保存
+                  </button>
+                )}
                 <button onClick={() => setViewMode(viewMode === 'edit' ? 'preview' : 'edit')} className={`px-3 py-2 text-xs md:text-sm rounded-lg font-bold shadow-sm active:scale-95 transition-transform whitespace-nowrap ${viewMode === 'edit' ? 'bg-blue-500 text-white' : 'bg-white text-slate-800'}`}>{viewMode === 'edit' ? '📸 LINE用に切替' : '✏️ 編集に戻る'}</button>
               </div>
             </div>
@@ -429,108 +499,111 @@
             )}
           </div>
 
-          <div className="p-2 md:p-4 flex-1 flex flex-col overflow-hidden">
-            <div className="flex-1 bg-white rounded-lg shadow-lg border-2 border-slate-300 overflow-auto relative">
-              
-              <div className="flex border-b-2 border-slate-500 bg-slate-100 sticky top-0 z-20 shadow-sm min-w-max">
-                <div className="w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center justify-center sticky left-0 top-0 bg-slate-200 z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
-                  現場 / 氏名
-                </div>
-                {currentDates.map((d, i) => {
-                  const isToday = d.date === todayStr;
-                  const headerBgClass = isToday ? 'bg-blue-100 border-b-2 border-blue-500' : (d.isHoliday ? 'bg-red-100' : 'bg-slate-50');
-                  const dateColorClass = isToday ? 'text-blue-800' : (d.isHoliday ? 'text-red-600' : 'text-slate-800');
-                  const dayColorClass = isToday ? 'text-blue-700' : (d.day === '土' ? 'text-blue-500' : (d.isHoliday ? 'text-red-500' : 'text-slate-500'));
-                  
-                  return (
-                    <div key={i} className={`w-20 md:w-24 flex-shrink-0 p-2 text-center relative border-r border-slate-300 ${headerBgClass}`}>
-                      <div className={`font-bold ${dateColorClass}`}>{d.date}</div>
-                      <div className={`text-xs font-bold ${dayColorClass}`}>({d.day}){isToday && <span className="ml-1 text-[10px] bg-blue-500 text-white px-1 py-0.5 rounded-sm">今日</span>}</div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="min-w-max">
-                <div className="border-b-4 border-slate-500">
-                  {stamps.filter(s => s.type === 'site').map((site, sIndex) => {
-                    const bgClass = site.colorClass.split(' ').find(c => c.startsWith('bg-'));
-                    const rowBgClass = ROW_BGS[bgClass] || 'bg-white';
-                    const textClass = site.colorClass.split(' ').find(c => c.startsWith('text-'));
+          <div className={`p-2 md:p-4 flex-1 flex flex-col ${viewMode === 'edit' ? 'overflow-hidden' : ''}`}>
+            {/* ★ここから下が画像として保存されるエリア */}
+            <div id="capture-area" className={`flex flex-col gap-4 ${viewMode === 'preview' ? 'p-2 bg-gray-100 min-w-max' : 'h-full'}`}>
+              <div className={`bg-white rounded-lg shadow-lg border-2 border-slate-300 relative ${viewMode === 'edit' ? 'flex-1 overflow-auto' : 'overflow-visible min-w-full'}`}>
+                
+                <div className={`flex border-b-2 border-slate-500 bg-slate-100 min-w-max ${viewMode === 'edit' ? 'sticky top-0 z-20 shadow-sm' : ''}`}>
+                  <div className={`w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center justify-center bg-slate-200 ${viewMode === 'edit' ? 'sticky left-0 top-0 z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]' : 'border-b-2 border-slate-500'}`}>
+                    現場 / 氏名
+                  </div>
+                  {currentDates.map((d, i) => {
+                    const isToday = d.date === todayStr;
+                    const headerBgClass = isToday ? 'bg-blue-100 border-b-2 border-blue-500' : (d.isHoliday ? 'bg-red-100' : 'bg-slate-50');
+                    const dateColorClass = isToday ? 'text-blue-800' : (d.isHoliday ? 'text-red-600' : 'text-slate-800');
+                    const dayColorClass = isToday ? 'text-blue-700' : (d.day === '土' ? 'text-blue-500' : (d.isHoliday ? 'text-red-500' : 'text-slate-500'));
+                    
                     return (
-                      <div key={`site-${sIndex}`} className={`flex border-b border-slate-400 ${rowBgClass}`}>
-                        <div className={`w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex flex-col justify-center items-center sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] bg-slate-200`}>
-                          <div className={`text-[11px] md:text-xs p-1 rounded w-full text-center border bg-white/90 ${textClass}`}>{site.name}</div>
+                      <div key={i} className={`w-20 md:w-24 flex-shrink-0 p-2 text-center relative border-r border-slate-300 ${headerBgClass}`}>
+                        <div className={`font-bold ${dateColorClass}`}>{d.date}</div>
+                        <div className={`text-xs font-bold ${dayColorClass}`}>({d.day}){isToday && <span className="ml-1 text-[10px] bg-blue-500 text-white px-1 py-0.5 rounded-sm">今日</span>}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="min-w-max">
+                  <div className="border-b-4 border-slate-500">
+                    {stamps.filter(s => s.type === 'site').map((site, sIndex) => {
+                      const bgClass = site.colorClass.split(' ').find(c => c.startsWith('bg-'));
+                      const rowBgClass = ROW_BGS[bgClass] || 'bg-white';
+                      const textClass = site.colorClass.split(' ').find(c => c.startsWith('text-'));
+                      return (
+                        <div key={`site-${sIndex}`} className={`flex border-b border-slate-400 ${rowBgClass}`}>
+                          <div className={`w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex flex-col justify-center items-center bg-slate-200 ${viewMode === 'edit' ? 'sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)]' : ''}`}>
+                            <div className={`text-[11px] md:text-xs p-1 rounded w-full text-center border bg-white/90 ${textClass}`}>{site.name}</div>
+                          </div>
+                          {currentDates.map((d, dIndex) => {
+                            const isHoliday = d.isHoliday;
+                            const isToday = d.date === todayStr;
+                            const cellBgClass = isToday ? 'bg-blue-50' : (isHoliday ? 'bg-red-50' : '');
+                            
+                            return (
+                              <div key={dIndex} onClick={() => handleSiteCellClick(site.name, d.date)} className={`w-20 md:w-24 flex-shrink-0 p-1 flex items-center justify-center relative border-r border-slate-300 ${cellBgClass} ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''}`} style={{ minHeight: '3.5rem' }}>
+                                <div className="text-[10px] md:text-xs font-bold text-slate-800 text-center break-all whitespace-pre-wrap leading-tight drop-shadow-sm">{siteSchedule[`${site.name}-${d.date}`]}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                    <div className={`bg-slate-700 text-white text-[10px] font-bold py-1 px-4 w-full tracking-widest ${viewMode === 'edit' ? 'sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)]' : ''}`}>▼ 人員配置</div>
+                  </div>
+
+                  {peopleList.map((person, pIndex) => {
+                    const pColorClass = personColors[person] || '';
+                    const pBg = pColorClass.split(' ').find(c => c.startsWith('bg-')) || 'bg-slate-200';
+                    const pRowBgClass = ROW_BGS[pBg] || 'bg-white';
+                    const pTextColorClass = pColorClass.split(' ').find(c => c.startsWith('text-')) || 'text-slate-800';
+                    return (
+                      <div key={pIndex} className={`flex border-b border-slate-400 transition-colors ${pRowBgClass} hover:brightness-95`}>
+                        <div onClick={() => viewMode === 'edit' && setSelectedPersonForColor(person)} className={`w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center text-[11px] md:text-sm ${viewMode === 'edit' ? 'cursor-pointer sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)]' : ''} ${pBg} ${pTextColorClass}`}>
+                          <span className="truncate pr-1">{person} 様</span>{viewMode === 'edit' && <span className="ml-auto text-[10px] opacity-40">🎨</span>}
                         </div>
                         {currentDates.map((d, dIndex) => {
-                          const isHoliday = d.isHoliday;
+                          const cellData = schedule[`${person}-${d.date}`];
                           const isToday = d.date === todayStr;
+                          const isHoliday = d.isHoliday;
                           const cellBgClass = isToday ? 'bg-blue-50' : (isHoliday ? 'bg-red-50' : '');
                           
+                          const cellItems = cellData ? (Array.isArray(cellData) ? cellData : [cellData]) : [];
+                          const isSingle = cellItems.length === 1;
+
                           return (
-                            <div key={dIndex} onClick={() => handleSiteCellClick(site.name, d.date)} className={`w-20 md:w-24 flex-shrink-0 p-1 flex items-center justify-center relative border-r border-slate-300 ${cellBgClass} ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''}`} style={{ minHeight: '3.5rem' }}>
-                              <div className="text-[10px] md:text-xs font-bold text-slate-800 text-center break-all whitespace-pre-wrap leading-tight drop-shadow-sm">{siteSchedule[`${site.name}-${d.date}`]}</div>
+                            <div key={dIndex} onClick={() => handlePersonCellClick(person, d.date)} 
+                                 className={`w-20 md:w-24 flex-shrink-0 p-1 flex flex-col gap-1 relative border-r border-slate-300 
+                                 ${cellBgClass} ${isToday ? 'border-x border-x-blue-400' : ''} 
+                                 ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''} 
+                                 ${isSingle ? 'justify-center items-center' : 'justify-start items-stretch'}`} 
+                                 style={{ minHeight: '4rem' }}>
+                              {cellItems.map((item, idx) => (
+                                <div key={idx} className={`flex flex-col items-center justify-center w-full rounded border shadow-sm ${getStampColor(item.siteName)} ${isSingle ? 'p-2 h-full' : 'p-1'}`}>
+                                  <div className="flex items-center justify-center gap-1">
+                                    {item.time && <span className="text-[8px] bg-white/80 text-slate-800 px-1 rounded-sm font-bold shadow-sm whitespace-nowrap">{item.time}</span>}
+                                    <span className={`font-bold leading-tight text-center ${isSingle ? 'text-xs md:text-sm' : 'text-[10px] md:text-[11px]'}`}>{item.siteName}</span>
+                                  </div>
+                                  {item.memo && <span className={`mt-0.5 pt-0.5 border-t border-black/10 w-full text-center leading-tight opacity-90 break-all ${isSingle ? 'text-[10px]' : 'text-[9px]'}`}>{item.memo}</span>}
+                                </div>
+                              ))}
                             </div>
                           );
                         })}
                       </div>
                     );
                   })}
-                  <div className="bg-slate-700 text-white text-[10px] font-bold py-1 px-4 sticky left-0 z-10 w-full shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] tracking-widest">▼ 人員配置</div>
                 </div>
-
-                {peopleList.map((person, pIndex) => {
-                  const pColorClass = personColors[person] || '';
-                  const pBg = pColorClass.split(' ').find(c => c.startsWith('bg-')) || 'bg-slate-200';
-                  const pRowBgClass = ROW_BGS[pBg] || 'bg-white';
-                  const pTextColorClass = pColorClass.split(' ').find(c => c.startsWith('text-')) || 'text-slate-800';
-                  return (
-                    <div key={pIndex} className={`flex border-b border-slate-400 transition-colors ${pRowBgClass} hover:brightness-95`}>
-                      <div onClick={() => viewMode === 'edit' && setSelectedPersonForColor(person)} className={`w-24 md:w-32 lg:w-40 flex-shrink-0 p-2 border-r-2 border-slate-400 font-bold flex items-center sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.15)] text-[11px] md:text-sm ${viewMode === 'edit' ? 'cursor-pointer' : ''} ${pBg} ${pTextColorClass}`}>
-                        <span className="truncate pr-1">{person} 様</span>{viewMode === 'edit' && <span className="ml-auto text-[10px] opacity-40">🎨</span>}
-                      </div>
-                      {currentDates.map((d, dIndex) => {
-                        const cellData = schedule[`${person}-${d.date}`];
-                        const isToday = d.date === todayStr;
-                        const isHoliday = d.isHoliday;
-                        const cellBgClass = isToday ? 'bg-blue-50' : (isHoliday ? 'bg-red-50' : '');
-                        
-                        const cellItems = cellData ? (Array.isArray(cellData) ? cellData : [cellData]) : [];
-                        const isSingle = cellItems.length === 1;
-
-                        return (
-                          <div key={dIndex} onClick={() => handlePersonCellClick(person, d.date)} 
-                               className={`w-20 md:w-24 flex-shrink-0 p-1 flex flex-col gap-1 relative border-r border-slate-300 
-                               ${cellBgClass} ${isToday ? 'border-x border-x-blue-400' : ''} 
-                               ${viewMode === 'edit' ? 'cursor-pointer hover:bg-black/5 active:bg-black/10' : ''} 
-                               ${isSingle ? 'justify-center items-center' : 'justify-start items-stretch'}`} 
-                               style={{ minHeight: '4rem' }}>
-                            {cellItems.map((item, idx) => (
-                              <div key={idx} className={`flex flex-col items-center justify-center w-full rounded border shadow-sm ${getStampColor(item.siteName)} ${isSingle ? 'p-2 h-full' : 'p-1'}`}>
-                                <div className="flex items-center justify-center gap-1">
-                                  {item.time && <span className="text-[8px] bg-white/80 text-slate-800 px-1 rounded-sm font-bold shadow-sm whitespace-nowrap">{item.time}</span>}
-                                  <span className={`font-bold leading-tight text-center ${isSingle ? 'text-xs md:text-sm' : 'text-[10px] md:text-[11px]'}`}>{item.siteName}</span>
-                                </div>
-                                {item.memo && <span className={`mt-0.5 pt-0.5 border-t border-black/10 w-full text-center leading-tight opacity-90 break-all ${isSingle ? 'text-[10px]' : 'text-[9px]'}`}>{item.memo}</span>}
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
               </div>
-            </div>
-            
-            <div className="mt-4 flex-shrink-0">
-              <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-3 w-full max-w-4xl shadow-sm">
-                <h3 className="font-bold text-yellow-800 mb-2 flex items-center text-sm md:text-base"><span className="mr-2">📝</span> 備考・連絡事項</h3>
-                {viewMode === 'edit' ? (
-                  <textarea value={globalMemo} onChange={(e) => setGlobalMemo(e.target.value)} onBlur={() => updateCloud({ globalMemo })} placeholder="全体連絡事項を入力..." className="w-full bg-white border border-yellow-200 rounded p-2 text-sm outline-none focus:ring-2 focus:ring-yellow-400" rows={2}/>
-                ) : (
-                  <div className="whitespace-pre-wrap text-sm text-slate-800 p-2 min-h-[3rem]">{globalMemo || "（備考なし）"}</div>
-                )}
+              
+              <div className="flex-shrink-0">
+                <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-3 w-full shadow-sm">
+                  <h3 className="font-bold text-yellow-800 mb-2 flex items-center text-sm md:text-base"><span className="mr-2">📝</span> 備考・連絡事項</h3>
+                  {viewMode === 'edit' ? (
+                    <textarea value={globalMemo} onChange={(e) => setGlobalMemo(e.target.value)} onBlur={() => updateCloud({ globalMemo })} placeholder="全体連絡事項を入力..." className="w-full bg-white border border-yellow-200 rounded p-2 text-sm outline-none focus:ring-2 focus:ring-yellow-400" rows={2}/>
+                  ) : (
+                    <div className="whitespace-pre-wrap text-sm text-slate-800 p-2 min-h-[3rem]">{globalMemo || "（備考なし）"}</div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -691,5 +764,6 @@
   </script>
 </body>
 </html>
+
 
 
